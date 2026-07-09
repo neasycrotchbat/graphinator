@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Graphinator</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+  <header>
+    <h1>GRAPHINATOR</h1>
+    <p class="tagline">Animated chart generator for After Effects</p>
+  </header>
+
+  <div class="info-box">
+    <strong>Where controls live:</strong> data, chart type &amp; formatting are edited
+    <em>here</em> — press <em>Update</em> to apply. After generating, colors, timing
+    &amp; scale are <em>live</em> on the <code>&gt;&gt; GRAPH CONTROLLER &lt;&lt;</code>
+    layer (select it &rarr; Effect Controls). Manual edits to generated layers are
+    lost on Update.
+  </div>
+
+  <section>
+    <h2>Chart Type</h2>
+    <div class="type-switch" id="typeSwitch">
+      <button data-type="bar" class="active">Bar</button>
+      <button data-type="line">Line</button>
+      <button data-type="pie">Pie</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>Text</h2>
+    <div class="field-row">
+      <label for="chartTitle">Title</label>
+      <input type="text" id="chartTitle" placeholder="(optional)">
+    </div>
+    <div class="field-row">
+      <label for="seriesName">Series name</label>
+      <input type="text" id="seriesName" value="Series 1">
+    </div>
+  </section>
+
+  <section>
+    <h2>Data <span class="hint">(2&ndash;60 points)</span></h2>
+    <div class="data-head">
+      <span class="col-label">Label</span>
+      <span class="col-value">Value</span>
+      <span class="col-custom" title="Override the auto tone with a custom color">Custom</span>
+      <span class="col-del"></span>
+    </div>
+    <div id="dataRows"></div>
+    <div class="data-actions">
+      <button id="addRow" class="small">+ Add row</button>
+      <button id="togglePaste" class="small">Paste data&hellip;</button>
+    </div>
+    <div id="pasteBox" class="hidden">
+      <textarea id="pasteArea" rows="5"
+        placeholder="One point per line: Label [tab or comma] Value&#10;Q1	1200&#10;Q2	1875"></textarea>
+      <button id="importPaste" class="small">Import (replaces rows)</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>Color</h2>
+    <div class="field-row">
+      <label for="masterColor">Master color</label>
+      <input type="color" id="masterColor" value="#4e8cff">
+      <button id="randomColor" class="small">🎲 Random</button>
+    </div>
+    <div class="field-row">
+      <label for="toneSpread">Tone spread</label>
+      <input type="range" id="toneSpread" min="0" max="100" value="45">
+      <span id="toneSpreadVal" class="range-val">45</span>
+    </div>
+    <div class="ramp-preview" id="rampPreview"></div>
+    <p class="note">Auto tones ramp off the master color. Both stay live on the
+       controller layer after generating; Random also updates an existing chart.</p>
+  </section>
+
+  <section>
+    <h2>Number Format</h2>
+    <div class="field-row">
+      <label for="fmtMode">Mode</label>
+      <select id="fmtMode">
+        <option value="number">Number</option>
+        <option value="percent">Percent of total (1 decimal)</option>
+      </select>
+    </div>
+    <div id="numberOpts">
+      <div class="field-row">
+        <label for="fmtDecimals">Decimals</label>
+        <input type="number" id="fmtDecimals" min="0" max="3" value="0">
+        <label class="inline-check"><input type="checkbox" id="fmtThousands" checked> 1,000s separator</label>
+      </div>
+      <div class="field-row">
+        <label for="fmtPrefix">Prefix</label>
+        <input type="text" id="fmtPrefix" class="short" placeholder="$">
+        <label for="fmtSuffix" class="mid-label">Suffix</label>
+        <input type="text" id="fmtSuffix" class="short" placeholder="k">
+      </div>
+    </div>
+  </section>
+
+  <section id="pieOpts" class="hidden">
+    <h2>Pie Options</h2>
+    <label class="inline-check block"><input type="checkbox" id="pieSort">
+      Sort slices largest-first from 12 o&rsquo;clock</label>
+    <label class="inline-check block"><input type="checkbox" id="pieIncludeValue">
+      Include raw value in labels (as well as %)</label>
+    <p class="note">All pie labels sit outside the chart with leader lines.</p>
+  </section>
+
+  <section>
+    <h2>Animation <span class="hint">(initial values)</span></h2>
+    <div class="field-row">
+      <label for="animDelay">Start delay</label>
+      <input type="number" id="animDelay" min="0" step="0.1" value="0.3"><span class="unit">s</span>
+      <label for="animDuration" class="mid-label">Duration</label>
+      <input type="number" id="animDuration" min="0.1" step="0.1" value="2"><span class="unit">s</span>
+    </div>
+    <div class="field-row">
+      <label for="animStagger">Stagger</label>
+      <input type="number" id="animStagger" min="0" step="0.02" value="0.12"><span class="unit">s</span>
+      <label for="animEasing" class="mid-label">Easing</label>
+      <select id="animEasing">
+        <option value="linear">Linear</option>
+        <option value="smooth" selected>Smooth</option>
+        <option value="overshoot">Overshoot</option>
+        <option value="bounce">Bounce</option>
+      </select>
+    </div>
+    <p class="note">These seed the chart on first generate. Afterwards they are live
+       on the controller layer&rsquo;s <code>ANIM</code> effects &mdash; Update will
+       <em>not</em> overwrite your tweaks there.</p>
+  </section>
+
+  <div class="footer-actions">
+    <button id="generate" class="primary">Generate / Update Chart</button>
+    <button id="loadFromComp">Load From Comp</button>
+  </div>
+
+  <div id="status"></div>
+
+  <script src="js/CSInterface.js"></script>
+  <script src="js/main.js"></script>
+</body>
+</html>
