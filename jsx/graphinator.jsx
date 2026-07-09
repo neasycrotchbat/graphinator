@@ -33,6 +33,26 @@
   // --------------------------------------------------------------------------
 
   var CTRL_NAME = ">> GRAPH CONTROLLER <<";
+
+  // Timeline label colors — one per layer type so the stack reads at a
+  // glance. (AE label indices: 1 Red, 2 Yellow, 3 Aqua, 4 Pink, 6 Peach,
+  // 7 Sea Foam, 8 Blue, 9 Green, 10 Purple, 12 Brown, 15 Sandstone.)
+  var LC = {
+    controller: 10, // purple
+    title: 1,       // red
+    legend: 9,      // green
+    value: 2,       // yellow — count-up value labels
+    category: 6,    // peach — category names / pie names
+    tick: 15,       // sandstone — muted axis ticks
+    axes: 12,       // brown — axes & gridlines
+    bar: 8,         // blue — bar shapes
+    line: 8,        // blue — the chart line
+    area: 7,        // sea foam — area fill
+    dot: 4,         // pink — line points
+    slice: 8,       // blue — pie slices
+    ring: 12,       // brown — pie outline ring
+    leader: 3       // aqua — pie leader lines
+  };
   var ITEM_TAG = "GRAPHINATOR_ITEM";
   var CTRL_TAG = "GRAPHINATOR_CONTROLLER";
   var DATA_TAG = "@@GRAPHINATOR_DATA@@";
@@ -316,9 +336,10 @@
     layer.setParentWithJump(ctrl);
   }
 
-  function addShapeItem(comp, ctrl, name) {
+  function addShapeItem(comp, ctrl, name, labelColor) {
     var lay = comp.layers.addShape();
     lay.name = name;
+    if (labelColor) { try { lay.label = labelColor; } catch (eL) {} }
     tagItem(lay, ctrl);
     return lay;
   }
@@ -348,9 +369,10 @@
     return out;
   }
 
-  function addTextItem(comp, ctrl, name, str, fontSize, justification, weight) {
+  function addTextItem(comp, ctrl, name, str, fontSize, justification, weight, labelColor) {
     var lay = comp.layers.addText(str);
     lay.name = name;
+    if (labelColor) { try { lay.label = labelColor; } catch (eL) {} }
     var tp = lay.property("ADBE Text Properties").property("ADBE Text Document");
     var td = tp.value;
     td.fontSize = fontSize;
@@ -517,7 +539,7 @@
   function buildAxesAndTicks(comp, ctrl, geo, niceMax, step, fmt, total) {
     var left = geo.left, right = geo.right, base = geo.base, top = geo.top, k = geo.k;
 
-    var axes = addShapeItem(comp, ctrl, "Axes & Gridlines");
+    var axes = addShapeItem(comp, ctrl, "Axes & Gridlines", LC.axes);
     axes.position.setValue([0, 0]);
 
     // Gridlines (behind everything else in this layer's stacking).
@@ -548,7 +570,7 @@
       var tv2 = step * j2;
       var y2 = base - geo.ph * (tv2 / niceMax);
       var lab = addTextItem(comp, ctrl, "Y Tick — " + formatStatic(tv2, fmt, total),
-        formatStatic(tv2, fmt, total), 22 * k, ParagraphJustification.RIGHT_JUSTIFY, "regular");
+        formatStatic(tv2, fmt, total), 22 * k, ParagraphJustification.RIGHT_JUSTIFY, "regular", LC.tick);
       lab.position.setValue([left - 16 * k, y2 + 8 * k]);
       lab.opacity.expression =
         'var C=thisComp.layer("' + CTRL_NAME + '");\n' +
@@ -561,7 +583,7 @@
     var k = geo.k;
     var y = geo.top - 52 * k;
 
-    var swatch = addShapeItem(comp, ctrl, "Legend Swatch");
+    var swatch = addShapeItem(comp, ctrl, "Legend Swatch", LC.legend);
     swatch.position.setValue([geo.left + 13 * k, y]);
     var grp = swatch.property("ADBE Root Vectors Group").addProperty("ADBE Vector Group");
     grp.name = "Swatch";
@@ -574,7 +596,7 @@
     swatch.opacity.expression = 'clamp((time-inPoint)/0.4,0,1)*100';
 
     var lab = addTextItem(comp, ctrl, "Legend — \"" + cfg.seriesName + "\"",
-      cfg.seriesName, 26 * k, ParagraphJustification.LEFT_JUSTIFY, "medium");
+      cfg.seriesName, 26 * k, ParagraphJustification.LEFT_JUSTIFY, "medium", LC.legend);
     lab.position.setValue([geo.left + 34 * k, y + 9 * k]);
     lab.opacity.expression = 'clamp((time-inPoint)/0.4,0,1)*100';
   }
@@ -582,7 +604,7 @@
   function buildTitle(comp, ctrl, cfg, x, y, k) {
     if (!cfg.title) return;
     var lab = addTextItem(comp, ctrl, "Chart Title — \"" + cfg.title + "\"",
-      cfg.title, 54 * k, ParagraphJustification.CENTER_JUSTIFY, "bold");
+      cfg.title, 54 * k, ParagraphJustification.CENTER_JUSTIFY, "bold", LC.title);
     lab.position.setValue([x, y]);
     lab.opacity.expression = 'clamp((time-inPoint)/0.4,0,1)*100';
   }
@@ -604,14 +626,18 @@
     var slot = pw / n;
     var barW = slot * 0.62;
 
-    for (var i = 0; i < n; i++) {
+    // Layers are created bottom-up in organized blocks — bars, then
+    // category labels, then value labels — so the timeline reads as tidy
+    // groups instead of interleaved per-bar layers. Reverse order within
+    // each block keeps 01 at the top of its group.
+    for (var i = n - 1; i >= 0; i--) {
       var it = cfg.items[i];
       var x = geo.left + slot * (i + 0.5);
       var h = ph * (it.value / niceMax);
       var colors = itemFillColorSpec(cfg, i, n);
 
       // --- the bar itself -------------------------------------------------
-      var bar = addShapeItem(comp, ctrl, "Bar " + pad2(i + 1) + " — \"" + it.label + "\"");
+      var bar = addShapeItem(comp, ctrl, "Bar " + pad2(i + 1) + " — \"" + it.label + "\"", LC.bar);
       bar.position.setValue([x, geo.base]);
 
       // Bright cap along the growing top edge (added first = renders in
@@ -658,21 +684,29 @@
 
       addTritoneFx(bar, colors);
       addGlowStack(bar, k, colors, true);
+    }
 
-      // --- count-up value label riding the top of the bar -----------------
-      var vlab = addTextItem(comp, ctrl, "Value " + pad2(i + 1) + " — \"" + it.label + "\"",
-        formatStatic(it.value, cfg.format, total), 36 * k, ParagraphJustification.CENTER_JUSTIFY, "bold");
+    // --- category labels under the baseline (own block in the timeline) ----
+    for (var i2 = n - 1; i2 >= 0; i2--) {
+      var itC = cfg.items[i2];
+      var clab = addTextItem(comp, ctrl, "Category " + pad2(i2 + 1) + " — \"" + itC.label + "\"",
+        itC.label, 27 * k, ParagraphJustification.CENTER_JUSTIFY, "medium", LC.category);
+      clab.position.setValue([geo.left + slot * (i2 + 0.5), geo.base + 44 * k]);
+      clab.opacity.expression = preamble(i2) + 'clamp(p*3,0,1)*100';
+    }
+
+    // --- count-up value labels: big, bold, tight to the bar tops -----------
+    for (var i3 = n - 1; i3 >= 0; i3--) {
+      var itV = cfg.items[i3];
+      var xV = geo.left + slot * (i3 + 0.5);
+      var hV = ph * (itV.value / niceMax);
+      var vlab = addTextItem(comp, ctrl, "Value " + pad2(i3 + 1) + " — \"" + itV.label + "\"",
+        formatStatic(itV.value, cfg.format, total), 72 * k, ParagraphJustification.CENTER_JUSTIFY, "bold", LC.value);
       vlab.position.expression =
-        preamble(i) + '[' + round3(x) + ',' + round3(geo.base) + '-Math.max(' + round3(h) + '*e,0)-' + round3(38 * k) + ']';
+        preamble(i3) + '[' + round3(xV) + ',' + round3(geo.base) + '-Math.max(' + round3(hV) + '*e,0)-' + round3(20 * k) + ']';
       vlab.property("ADBE Text Properties").property("ADBE Text Document").expression =
-        preamble(i) + countUpBody(it.value, total, cfg.format) + 'out';
-      vlab.opacity.expression = preamble(i) + 'clamp(p*4,0,1)*100';
-
-      // --- category label under the baseline -------------------------------
-      var clab = addTextItem(comp, ctrl, "Category " + pad2(i + 1) + " — \"" + it.label + "\"",
-        it.label, 27 * k, ParagraphJustification.CENTER_JUSTIFY, "medium");
-      clab.position.setValue([x, geo.base + 44 * k]);
-      clab.opacity.expression = preamble(i) + 'clamp(p*3,0,1)*100';
+        preamble(i3) + countUpBody(itV.value, total, cfg.format) + 'out';
+      vlab.opacity.expression = preamble(i3) + 'clamp(p*4,0,1)*100';
     }
 
     buildLegend(comp, ctrl, geo, cfg);
@@ -726,7 +760,7 @@
     for (i = 0; i < n; i++) apts.push(pts[i]);
     apts.push([pts[n - 1][0], geo.base]);
     apts.push([pts[0][0], geo.base]);
-    var area = addShapeItem(comp, ctrl, "Area Fill — \"" + cfg.seriesName + "\"");
+    var area = addShapeItem(comp, ctrl, "Area Fill — \"" + cfg.seriesName + "\"", LC.area);
     area.position.setValue([0, 0]);
     var acont = addGroupWithPath(area, "Area", apts, true);
     var afill = acont.addProperty("ADBE Vector Graphic - Fill");
@@ -742,7 +776,7 @@
     } catch (eW) {}
 
     // --- the line -----------------------------------------------------------
-    var line = addShapeItem(comp, ctrl, "Chart Line — \"" + cfg.seriesName + "\"");
+    var line = addShapeItem(comp, ctrl, "Chart Line — \"" + cfg.seriesName + "\"", LC.line);
     line.position.setValue([0, 0]);
     var cont = addGroupWithPath(line, "Line", pts, false);
     var trim = cont.addProperty("ADBE Vector Filter - Trim");
@@ -756,15 +790,24 @@
     var lineColors = { fill: { expr: rampColorExpr(0, 1) }, highlight: { expr: rampColorExpr(0, 1.5) } };
     addGlowStack(line, k, lineColors, true);
 
-    // --- dots + labels -------------------------------------------------------
-    for (i = 0; i < n; i++) {
+    // Pop timing: each point pops in over a short window after the draw-on
+    // passes it. The window shrinks near the end of the path so the LAST
+    // point still completes its pop at exactly progress = 1 (a fixed-width
+    // window left it stranded at ~22% opacity).
+    var wins = [];
+    for (i = 0; i < n; i++) wins.push(Math.max(0.001, Math.min(0.08, 1 - fracs[i])));
+    function popPre(idx) {
+      return preamble(0) +
+        'var pp=clamp((Math.min(e,1)-' + round6(fracs[idx]) + ')/' + round6(wins[idx]) + ',0,1);pp=pp*pp*(3-2*pp);\n';
+    }
+
+    // Layers are created bottom-up in organized blocks: dots, then category
+    // labels, then value labels. Reverse order keeps 01 on top per block.
+    for (i = n - 1; i >= 0; i--) {
       var it = cfg.items[i];
       var colors = itemFillColorSpec(cfg, i, n);
-      var popPre = preamble(0) +
-        'var f=' + round3(fracs[i]) + ';\n' +
-        'var pp=clamp((Math.min(e,1)-f)*10,0,1);pp=pp*pp*(3-2*pp);\n';
 
-      var dot = addShapeItem(comp, ctrl, "Point " + pad2(i + 1) + " — \"" + it.label + "\"");
+      var dot = addShapeItem(comp, ctrl, "Point " + pad2(i + 1) + " — \"" + it.label + "\"", LC.dot);
       dot.position.setValue(pts[i]);
       var dgrp = dot.property("ADBE Root Vectors Group").addProperty("ADBE Vector Group");
       dgrp.name = "Dot";
@@ -778,21 +821,27 @@
       dst.property("ADBE Vector Stroke Width").expression = outlineWidthExpr();
       applyColor(dst.property("ADBE Vector Stroke Color"), colors.fill);
       // pop with a little overshoot as the line arrives
-      dot.scale.expression = popPre +
+      dot.scale.expression = popPre(i) +
         'var s=1.70158,u=pp-1;var eb=1+(s+1)*u*u*u+s*u*u;\n[100*eb,100*eb]';
       addGlowStack(dot, k, colors, false); // core tier only — 3 glows × 60 dots would crawl
+    }
 
-      var vlab = addTextItem(comp, ctrl, "Value " + pad2(i + 1) + " — \"" + it.label + "\"",
-        formatStatic(it.value, cfg.format, total), 34 * k, ParagraphJustification.CENTER_JUSTIFY, "bold");
+    for (i = n - 1; i >= 0; i--) {
+      var itC = cfg.items[i];
+      var clab = addTextItem(comp, ctrl, "Category " + pad2(i + 1) + " — \"" + itC.label + "\"",
+        itC.label, 27 * k, ParagraphJustification.CENTER_JUSTIFY, "medium", LC.category);
+      clab.position.setValue([pts[i][0], geo.base + 44 * k]);
+      clab.opacity.expression = popPre(i) + 'pp*100';
+    }
+
+    for (i = n - 1; i >= 0; i--) {
+      var itV = cfg.items[i];
+      var vlab = addTextItem(comp, ctrl, "Value " + pad2(i + 1) + " — \"" + itV.label + "\"",
+        formatStatic(itV.value, cfg.format, total), 34 * k, ParagraphJustification.CENTER_JUSTIFY, "bold", LC.value);
       vlab.position.setValue([pts[i][0], pts[i][1] - 36 * k]);
       vlab.property("ADBE Text Properties").property("ADBE Text Document").expression =
-        popPre + countUpBody(it.value, total, cfg.format, "pp") + 'out';
-      vlab.opacity.expression = popPre + 'pp*100';
-
-      var clab = addTextItem(comp, ctrl, "Category " + pad2(i + 1) + " — \"" + it.label + "\"",
-        it.label, 27 * k, ParagraphJustification.CENTER_JUSTIFY, "medium");
-      clab.position.setValue([pts[i][0], geo.base + 44 * k]);
-      clab.opacity.expression = popPre + 'pp*100';
+        popPre(i) + countUpBody(itV.value, total, cfg.format, "pp") + 'out';
+      vlab.opacity.expression = popPre(i) + 'pp*100';
     }
 
     buildLegend(comp, ctrl, geo, cfg);
@@ -849,7 +898,10 @@
 
     var rimW = 12 * k;
 
-    for (i = 0; i < n; i++) {
+    // Layers are created bottom-up in organized blocks: slices, outline
+    // ring, leader lines, then labels — tidy groups in the timeline, 01 at
+    // the top of each block.
+    for (i = n - 1; i >= 0; i--) {
       var s = slices[i];
       var it = cfg.items[s.idx];
       var colors = itemFillColorSpec(cfg, i, n);
@@ -861,7 +913,7 @@
       var gateExpr = SWEEP + '(G>' + c0 + ')?100:0';
 
       // --- slice -----------------------------------------------------------
-      var slice = addShapeItem(comp, ctrl, "Pie Slice " + pad2(i + 1) + " — " + niceName);
+      var slice = addShapeItem(comp, ctrl, "Pie Slice " + pad2(i + 1) + " — " + niceName, LC.slice);
       slice.position.setValue([0, 0]);
 
       // Bright rim along the outer edge (added first = renders in front),
@@ -907,49 +959,11 @@
       slice.opacity.expression = gateExpr;
       addTritoneFx(slice, colors);
       addGlowStack(slice, k, colors, true);
-
-      // Labels appear as the sweep crosses this slice's midpoint.
-      var mid = round6(s.cum + s.frac / 2);
-      var win = round6(Math.max(s.frac / 2, 0.04));
-      var LP = SWEEP + 'var lp=clamp((G-' + mid + ')/' + win + ',0,1);lp=lp*lp*(3-2*lp);\n';
-
-      // --- leader line -------------------------------------------------------
-      var p0 = [s.dir[0] * (R - 4 * k), s.dir[1] * (R - 4 * k)];
-      var p1 = [s.dir[0] * (R + 40 * k), s.dir[1] * (R + 40 * k)];
-      var endX = s.side * (R + 120 * k);
-      var p2 = [endX, s.labelY];
-      var leader = addShapeItem(comp, ctrl, "Leader " + pad2(i + 1) + " — " + niceName);
-      leader.position.setValue([0, 0]);
-      var lcont = addGroupWithPath(leader, "Leader", [p0, p1, p2], false);
-      var ltrim = lcont.addProperty("ADBE Vector Filter - Trim");
-      ltrim.property("ADBE Vector Trim Start").setValue(0);
-      ltrim.property("ADBE Vector Trim End").expression = LP + 'lp*100';
-      addStroke(lcont, 2 * k, labelColorExpr(), false);
-
-      // --- external label: name (medium) over a bold count-up percent -------
-      var just = s.side > 0 ? ParagraphJustification.LEFT_JUSTIFY : ParagraphJustification.RIGHT_JUSTIFY;
-      var labX = endX + s.side * 14 * k;
-
-      var nameLab = addTextItem(comp, ctrl, "Label " + pad2(i + 1) + " — " + niceName,
-        it.label, 27 * k, just, "medium");
-      nameLab.position.setValue([labX, s.labelY + 2 * k]);
-      nameLab.opacity.expression = LP + 'lp*100';
-
-      var pctStatic = (cfg.pie.includeValue ? formatStaticNumber(it.value, cfg.format) + " · " : "") +
-        pct.toFixed(1) + "%";
-      var pctLab = addTextItem(comp, ctrl, "Value " + pad2(i + 1) + " — " + niceName,
-        pctStatic, 36 * k, just, "bold");
-      pctLab.position.setValue([labX, s.labelY + 42 * k]);
-      var valPart = cfg.pie.includeValue
-        ? '"' + escStr(formatStaticNumber(it.value, cfg.format)) + ' · "'
-        : '""';
-      pctLab.property("ADBE Text Properties").property("ADBE Text Document").expression =
-        LP + valPart + '+(' + round3(pct) + '*lp).toFixed(1)+"%"';
-      pctLab.opacity.expression = LP + 'lp*100';
     }
 
-    // Darker outline ring around the pie's edge, drawn by the same sweep.
-    var ring = addShapeItem(comp, ctrl, "Pie Outline Ring");
+    // Darker outline ring around the pie's edge, drawn by the same sweep —
+    // sits just above the slices in the stack.
+    var ring = addShapeItem(comp, ctrl, "Pie Outline Ring", LC.ring);
     ring.position.setValue([0, 0]);
     var rgrp = ring.property("ADBE Root Vectors Group").addProperty("ADBE Vector Group");
     rgrp.name = "Ring";
@@ -963,6 +977,59 @@
     rst.property("ADBE Vector Stroke Width").expression = outlineWidthExpr();
     rst.property("ADBE Vector Stroke Color").expression = rampColorExpr(0, 0.55);
     ring.opacity.expression = SWEEP + '(G>0)?100:0';
+
+    // Labels appear as the sweep crosses each slice's midpoint.
+    function labelLP(sl) {
+      var mid = round6(sl.cum + sl.frac / 2);
+      var win = round6(Math.max(sl.frac / 2, 0.04));
+      return SWEEP + 'var lp=clamp((G-' + mid + ')/' + win + ',0,1);lp=lp*lp*(3-2*lp);\n';
+    }
+
+    // --- leader lines (own block) -------------------------------------------
+    for (i = n - 1; i >= 0; i--) {
+      s = slices[i];
+      it = cfg.items[s.idx];
+      niceName = "\"" + it.label + "\" (" + (s.frac * 100).toFixed(1) + "%)";
+      var LP = labelLP(s);
+      var p0 = [s.dir[0] * (R - 4 * k), s.dir[1] * (R - 4 * k)];
+      var p1 = [s.dir[0] * (R + 40 * k), s.dir[1] * (R + 40 * k)];
+      var p2 = [s.side * (R + 120 * k), s.labelY];
+      var leader = addShapeItem(comp, ctrl, "Leader " + pad2(i + 1) + " — " + niceName, LC.leader);
+      leader.position.setValue([0, 0]);
+      var lcont = addGroupWithPath(leader, "Leader", [p0, p1, p2], false);
+      var ltrim = lcont.addProperty("ADBE Vector Filter - Trim");
+      ltrim.property("ADBE Vector Trim Start").setValue(0);
+      ltrim.property("ADBE Vector Trim End").expression = LP + 'lp*100';
+      addStroke(lcont, 2 * k, labelColorExpr(), false);
+    }
+
+    // --- external labels: name (medium) over a bold count-up percent --------
+    for (i = n - 1; i >= 0; i--) {
+      s = slices[i];
+      it = cfg.items[s.idx];
+      pct = s.frac * 100;
+      niceName = "\"" + it.label + "\" (" + pct.toFixed(1) + "%)";
+      var LP2 = labelLP(s);
+      var just = s.side > 0 ? ParagraphJustification.LEFT_JUSTIFY : ParagraphJustification.RIGHT_JUSTIFY;
+      var labX = s.side * (R + 120 * k) + s.side * 14 * k;
+
+      var nameLab = addTextItem(comp, ctrl, "Label " + pad2(i + 1) + " — " + niceName,
+        it.label, 27 * k, just, "medium", LC.category);
+      nameLab.position.setValue([labX, s.labelY + 2 * k]);
+      nameLab.opacity.expression = LP2 + 'lp*100';
+
+      var pctStatic = (cfg.pie.includeValue ? formatStaticNumber(it.value, cfg.format) + " · " : "") +
+        pct.toFixed(1) + "%";
+      var pctLab = addTextItem(comp, ctrl, "Value " + pad2(i + 1) + " — " + niceName,
+        pctStatic, 36 * k, just, "bold", LC.value);
+      pctLab.position.setValue([labX, s.labelY + 42 * k]);
+      var valPart = cfg.pie.includeValue
+        ? '"' + escStr(formatStaticNumber(it.value, cfg.format)) + ' · "'
+        : '""';
+      pctLab.property("ADBE Text Properties").property("ADBE Text Document").expression =
+        LP2 + valPart + '+(' + round3(pct) + '*lp).toFixed(1)+"%"';
+      pctLab.opacity.expression = LP2 + 'lp*100';
+    }
 
     buildTitle(comp, ctrl, cfg, 0, -R - 130 * k, k);
     return { k: k, r: R };

@@ -240,7 +240,7 @@
     if (cfg.anim) {
       $('animDelay').value = cfg.anim.delay != null ? cfg.anim.delay : 0.3;
       $('animDuration').value = cfg.anim.duration != null ? cfg.anim.duration : 2;
-      $('animStagger').value = cfg.anim.stagger != null ? cfg.anim.stagger : 0.12;
+      $('animStagger').value = cfg.anim.stagger != null ? cfg.anim.stagger : 0.25;
       $('animEasing').value = cfg.anim.easing || 'smooth';
     }
     syncTypeUI();

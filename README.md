@@ -115,14 +115,24 @@ after the title** and axis ticks the quietest:
 
 | Element | Size (at 1080p) | Weight |
 |---|---|---|
+| Value labels on bars | 72 | Bold |
 | Chart title | 54 | Bold |
-| Value labels (bar/line/pie %) | 36 / 34 / 36 | Bold |
+| Value labels (line / pie %) | 34 / 36 | Bold |
 | Category & axis labels, pie names | 27 | Medium |
 | Legend | 26 | Medium |
 | Y-axis ticks | 22 | Regular, 80% opacity |
 
 Pie labels are two lines: the name (medium) with the bold percent counting
 up beneath it. All sizes scale with comp resolution.
+
+### Timeline organization
+
+Generated layers stack in tidy blocks — controller / title / legend /
+value labels / category labels / chart geometry / ticks / axes (pie:
+labels / leaders / ring / slices) — with `01` at the top of each block, and
+each layer type gets its own timeline label color (values yellow, categories
+peach, geometry blue, leaders aqua, ticks sandstone, axes brown, legend
+green, title red, controller purple).
 
 ### Limits (v1)
 
