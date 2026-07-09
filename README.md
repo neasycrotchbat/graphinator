@@ -32,7 +32,7 @@ Built for AE 2025 (25.x) on Windows; the manifest accepts AE 2019 (16.0) and up.
 | Master color, tone spread, label color | **`>> GRAPH CONTROLLER <<` layer** → Effect Controls (`COLOR |` / `STYLE |` groups) — live, no regeneration |
 | Build timing: delay, duration, stagger, easing | Controller layer → `ANIM |` effects — live |
 | Overall chart size | Controller layer → `SCALE | Overall Scale` — live |
-| Outline/highlight width, line weight | Controller layer → `STYLE |` effects — live |
+| Outline width, line weight, glow intensity | Controller layer → `STYLE |` effects — live (`Glow Intensity` 0 = off) |
 
 Rules of the road:
 
@@ -61,15 +61,19 @@ Rules of the road:
 
 ### Chart-type notes
 
-- **Bar** — bars grow from the baseline with stagger; count-up value labels
-  ride the bar tops; category labels fade in underneath. Axes, gridlines, and
-  a legend are generated with them.
-- **Line** — draws on via trim paths; dots and per-point value labels pop in
-  as the line passes each point.
-- **Pie** — slices sweep open from 12 o'clock. All labels sit **outside** the
-  pie with leader lines (so thin slivers stay readable), stacked apart
-  automatically when slices are thin. Optional largest-first sorting and
-  raw-value-in-label toggles in the panel.
+- **Bar** — bars grow from the baseline with stagger, each with a bright
+  top-cap highlight and soft glow; count-up value labels ride the bar tops;
+  category labels fade in underneath. Axes, gridlines, and a legend are
+  generated with them.
+- **Line** — draws on via trim paths with a glow and a soft area fill fading
+  in underneath; glossy dots and per-point value labels pop in as the line
+  passes each point.
+- **Pie** — the whole pie reveals in **one continuous radial sweep from
+  12 o'clock**, each wedge growing adjacent to the last; nothing is visible
+  before the sweep reaches it. Slices get a bright outer rim highlight and
+  glow. All labels sit **outside** the pie with leader lines (so thin slivers
+  stay readable), stacked apart automatically when slices are thin. Optional
+  largest-first sorting and raw-value-in-label toggles in the panel.
 - **Number formats** — plain numbers (decimals, thousands separator,
   prefix/suffix like `$`/`k`) or **percent of total with 1 decimal**, applied
   to value labels and axis ticks. Labels count up as the chart builds.

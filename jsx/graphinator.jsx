@@ -61,6 +61,9 @@
 
   function round3(v) { return Math.round(v * 1000) / 1000; }
 
+  // Pie angles need more precision — adjacent wedges share exact boundaries.
+  function round6(v) { return Math.round(v * 1000000) / 1000000; }
+
   function thousandsStr(s) {
     var pt = String(s).split(".");
     var x = pt[0];
@@ -251,6 +254,7 @@
       ["ADBE Slider Control", "ANIM | Stagger", cfg.anim.stagger],
       ["ADBE Slider Control", "STYLE | Outline Width", 4],
       ["ADBE Slider Control", "STYLE | Line Weight", 8],
+      ["ADBE Slider Control", "STYLE | Glow Intensity", 1],
       ["ADBE Color Control", "STYLE | Label Color", [0.95, 0.95, 0.95, 1]],
       ["ADBE Slider Control", "SCALE | Overall Scale", 100]
     ];
@@ -320,6 +324,27 @@
     return lay;
   }
 
+  function findFxProp(fx, matchName, dispName) {
+    var p = null;
+    try { p = fx.property(matchName); } catch (e1) { p = null; }
+    if (!p) { try { p = fx.property(dispName); } catch (e2) { p = null; } }
+    return p;
+  }
+
+  function setFxValue(fx, m, d, v) { var p = findFxProp(fx, m, d); if (p) { try { p.setValue(v); } catch (e) {} } }
+  function setFxExpr(fx, m, d, ex) { var p = findFxProp(fx, m, d); if (p) { try { p.expression = ex; } catch (e) {} } }
+
+  /* Soft neon glow, driven live by STYLE | Glow Intensity (0 = off). */
+  function addGlowFx(layer, radiusPx) {
+    try {
+      var fx = fxParade(layer).addProperty("ADBE Glo2");
+      setFxValue(fx, "ADBE Glo2-0002", "Glow Threshold", 55);
+      setFxValue(fx, "ADBE Glo2-0003", "Glow Radius", radiusPx);
+      setFxExpr(fx, "ADBE Glo2-0004", "Glow Intensity",
+        'Math.max(thisComp.layer("' + CTRL_NAME + '").effect("STYLE | Glow Intensity")(1),0)');
+    } catch (err) { /* glow is decorative — skip if unavailable */ }
+  }
+
   /* Fill effect so every label follows the controller's Label Color live. */
   function addLabelColorFx(layer) {
     try {
@@ -361,14 +386,18 @@
 
   function itemFillColorSpec(cfg, i, n) {
     // Returns {expr:...} for ramped tones or {value:[r,g,b,a]} for overrides.
+    // fill = body tone, outline = darkened edge, highlight = brightened sheen.
     var it = cfg.items[i];
     if (it.useCustom) {
       var rgb = hexToRgb(it.color);
       return { fill: { value: [rgb[0], rgb[1], rgb[2], 1] },
-               outline: { value: [rgb[0] * 0.55, rgb[1] * 0.55, rgb[2] * 0.55, 1] } };
+               outline: { value: [rgb[0] * 0.55, rgb[1] * 0.55, rgb[2] * 0.55, 1] },
+               highlight: { value: [Math.min(rgb[0] * 1.5 + 0.08, 1), Math.min(rgb[1] * 1.5 + 0.08, 1), Math.min(rgb[2] * 1.5 + 0.08, 1), 1] } };
     }
     var t = itemTone(i, n);
-    return { fill: { expr: rampColorExpr(t, 1) }, outline: { expr: rampColorExpr(t, 0.55) } };
+    return { fill: { expr: rampColorExpr(t, 1) },
+             outline: { expr: rampColorExpr(t, 0.55) },
+             highlight: { expr: rampColorExpr(t, 1.5) } };
   }
 
   function applyColor(prop, spec) {
@@ -485,6 +514,22 @@
       // --- the bar itself -------------------------------------------------
       var bar = addShapeItem(comp, ctrl, "Bar " + pad2(i + 1) + " — \"" + it.label + "\"");
       bar.position.setValue([x, geo.base]);
+
+      // Bright cap along the growing top edge (added first = renders in
+      // front). Its height is capped by the bar's own height so nothing
+      // shows before the build starts.
+      var capH = 12 * k;
+      var hgrp = bar.property("ADBE Root Vectors Group").addProperty("ADBE Vector Group");
+      hgrp.name = "Top Highlight";
+      var hcont = hgrp.property("ADBE Vectors Group");
+      var hrect = hcont.addProperty("ADBE Vector Shape - Rect");
+      hrect.property("ADBE Vector Rect Size").expression =
+        preamble(i) + 'var hh=Math.max(' + round3(h) + '*e,0);\n[' + round3(barW * 0.9) + ',Math.min(' + round3(capH) + ',hh)]';
+      hrect.property("ADBE Vector Rect Position").expression =
+        preamble(i) + 'var hh=Math.max(' + round3(h) + '*e,0);\n[0,-hh+Math.min(' + round3(capH) + ',hh)/2]';
+      var hfill = hcont.addProperty("ADBE Vector Graphic - Fill");
+      applyColor(hfill.property("ADBE Vector Fill Color"), colors.highlight);
+
       var grp = bar.property("ADBE Root Vectors Group").addProperty("ADBE Vector Group");
       grp.name = "Bar";
       var cont = grp.property("ADBE Vectors Group");
@@ -498,6 +543,8 @@
       var st = cont.addProperty("ADBE Vector Graphic - Stroke");
       st.property("ADBE Vector Stroke Width").expression = outlineWidthExpr();
       applyColor(st.property("ADBE Vector Stroke Color"), colors.outline);
+
+      addGlowFx(bar, 30 * k);
 
       // --- count-up value label riding the top of the bar -----------------
       var vlab = addTextItem(comp, ctrl, "Value " + pad2(i + 1) + " — \"" + it.label + "\"",
@@ -561,6 +608,18 @@
       fracs.push(Math.min(f * 0.97, 0.97)); // nudge earlier so the last dot fires
     }
 
+    // --- soft area fill under the line (fades in as the line draws) --------
+    var apts = [];
+    for (i = 0; i < n; i++) apts.push(pts[i]);
+    apts.push([pts[n - 1][0], geo.base]);
+    apts.push([pts[0][0], geo.base]);
+    var area = addShapeItem(comp, ctrl, "Area Fill — \"" + cfg.seriesName + "\"");
+    area.position.setValue([0, 0]);
+    var acont = addGroupWithPath(area, "Area", apts, true);
+    var afill = acont.addProperty("ADBE Vector Graphic - Fill");
+    afill.property("ADBE Vector Fill Color").expression = rampColorExpr(0, 1);
+    area.opacity.expression = preamble(0) + 'Math.min(e,1)*18';
+
     // --- the line -----------------------------------------------------------
     var line = addShapeItem(comp, ctrl, "Chart Line — \"" + cfg.seriesName + "\"");
     line.position.setValue([0, 0]);
@@ -573,6 +632,7 @@
       'thisComp.layer("' + CTRL_NAME + '").effect("STYLE | Line Weight")(1)';
     st.property("ADBE Vector Stroke Color").expression = rampColorExpr(0, 1);
     try { st.property("ADBE Vector Stroke Line Cap").setValue(2); } catch (eCap) {} // round
+    addGlowFx(line, 24 * k);
 
     // --- dots + labels -------------------------------------------------------
     for (i = 0; i < n; i++) {
@@ -589,14 +649,16 @@
       var dcont = dgrp.property("ADBE Vectors Group");
       var ell = dcont.addProperty("ADBE Vector Shape - Ellipse");
       ell.property("ADBE Vector Ellipse Size").setValue([18 * k, 18 * k]);
+      // Glossy dot: bright core with a base-tone ring, like the reference.
       var dfill = dcont.addProperty("ADBE Vector Graphic - Fill");
-      applyColor(dfill.property("ADBE Vector Fill Color"), colors.fill);
+      applyColor(dfill.property("ADBE Vector Fill Color"), colors.highlight);
       var dst = dcont.addProperty("ADBE Vector Graphic - Stroke");
       dst.property("ADBE Vector Stroke Width").expression = outlineWidthExpr();
-      applyColor(dst.property("ADBE Vector Stroke Color"), colors.outline);
+      applyColor(dst.property("ADBE Vector Stroke Color"), colors.fill);
       // pop with a little overshoot as the line arrives
       dot.scale.expression = popPre +
         'var s=1.70158,u=pp-1;var eb=1+(s+1)*u*u*u+s*u*u;\n[100*eb,100*eb]';
+      addGlowFx(dot, 12 * k);
 
       var vlab = addTextItem(comp, ctrl, "Value " + pad2(i + 1) + " — \"" + it.label + "\"",
         formatStatic(it.value, cfg.format, total), 28 * k, ParagraphJustification.CENTER_JUSTIFY);
@@ -619,8 +681,14 @@
   // ============================================================ pie chart
 
   /* Slices use the classic trim-path trick: a circle path of radius R/2 with
-   * a stroke R wide fills the full disc; Trim Start/End carve the wedge, and
-   * an expression sweeps Trim End open. Trim 0% sits at 12 o'clock. */
+   * a stroke R wide fills the full disc; Trim Start/End carve the wedge.
+   *
+   * The reveal is ONE continuous radial sweep from 12 o'clock: a single
+   * eased progress G (0..1 of the full circle, no per-slice stagger) drives
+   * every slice, and each slice shows the clamped window [cum, cum+frac] of
+   * G — so wedges grow adjacent to each other as the sweep passes through
+   * them. Every slice layer's opacity is gated on the sweep reaching its
+   * start angle, so nothing is visible before the animation begins. */
   function buildPie(comp, ctrl, cfg, k) {
     var R = 330 * k;
     var n = cfg.items.length;
@@ -635,6 +703,8 @@
     var total = sum(cfg.items);
     var fracs = [];
     for (i = 0; i < n; i++) fracs.push(cfg.items[order[i]].value / total);
+
+    var SWEEP = preamble(0) + 'var G=Math.min(e,1);\n';
 
     // Pre-compute label slots and resolve vertical collisions per side.
     var cum = 0;
@@ -654,29 +724,59 @@
     resolveLabelCollisions(slices, 1, 38 * k, R + 140 * k);
     resolveLabelCollisions(slices, -1, 38 * k, R + 140 * k);
 
+    var rimW = 12 * k;
+
     for (i = 0; i < n; i++) {
       var s = slices[i];
       var it = cfg.items[s.idx];
       var colors = itemFillColorSpec(cfg, i, n);
       var pct = s.frac * 100;
       var niceName = "\"" + it.label + "\" (" + pct.toFixed(1) + "%)";
+      var c0 = round6(s.cum);
+      var c1 = round6(s.cum + s.frac);
+      var trimEndExpr = SWEEP + 'clamp(G,' + c0 + ',' + c1 + ')*100';
+      var gateExpr = SWEEP + '(G>' + c0 + ')?100:0';
 
       // --- slice -----------------------------------------------------------
       var slice = addShapeItem(comp, ctrl, "Pie Slice " + pad2(i + 1) + " — " + niceName);
       slice.position.setValue([0, 0]);
+
+      // Bright rim along the outer edge (added first = renders in front),
+      // swept with the slice — the glossy edge from the reference look.
+      var rgrp2 = slice.property("ADBE Root Vectors Group").addProperty("ADBE Vector Group");
+      rgrp2.name = "Rim Highlight";
+      var rcont2 = rgrp2.property("ADBE Vectors Group");
+      var rell2 = rcont2.addProperty("ADBE Vector Shape - Ellipse");
+      rell2.property("ADBE Vector Ellipse Size").setValue([2 * R - rimW, 2 * R - rimW]);
+      var rtrim2 = rcont2.addProperty("ADBE Vector Filter - Trim");
+      rtrim2.property("ADBE Vector Trim Start").setValue(c0 * 100);
+      rtrim2.property("ADBE Vector Trim End").expression = trimEndExpr;
+      var rst2 = rcont2.addProperty("ADBE Vector Graphic - Stroke");
+      rst2.property("ADBE Vector Stroke Width").setValue(rimW);
+      applyColor(rst2.property("ADBE Vector Stroke Color"), colors.highlight);
+      try { rst2.property("ADBE Vector Stroke Line Cap").setValue(1); } catch (eCap1) {}
+
       var grp = slice.property("ADBE Root Vectors Group").addProperty("ADBE Vector Group");
       grp.name = "Slice";
       var cont = grp.property("ADBE Vectors Group");
       var ell = cont.addProperty("ADBE Vector Shape - Ellipse");
       ell.property("ADBE Vector Ellipse Size").setValue([R, R]); // path radius R/2
       var trim = cont.addProperty("ADBE Vector Filter - Trim");
-      trim.property("ADBE Vector Trim Start").setValue(s.cum * 100);
-      trim.property("ADBE Vector Trim End").expression =
-        preamble(i) + '(' + round3(s.cum) + '+' + round3(s.frac) + '*e)*100';
+      trim.property("ADBE Vector Trim Start").setValue(c0 * 100);
+      trim.property("ADBE Vector Trim End").expression = trimEndExpr;
       var st = cont.addProperty("ADBE Vector Graphic - Stroke");
       st.property("ADBE Vector Stroke Width").setValue(R);
       applyColor(st.property("ADBE Vector Stroke Color"), colors.fill);
       try { st.property("ADBE Vector Stroke Line Cap").setValue(1); } catch (eCap) {} // butt = radial edges
+
+      // Hidden until the sweep reaches this slice — nothing pre-renders.
+      slice.opacity.expression = gateExpr;
+      addGlowFx(slice, 30 * k);
+
+      // Labels appear as the sweep crosses this slice's midpoint.
+      var mid = round6(s.cum + s.frac / 2);
+      var win = round6(Math.max(s.frac / 2, 0.04));
+      var LP = SWEEP + 'var lp=clamp((G-' + mid + ')/' + win + ',0,1);lp=lp*lp*(3-2*lp);\n';
 
       // --- leader line -------------------------------------------------------
       var p0 = [s.dir[0] * (R - 4 * k), s.dir[1] * (R - 4 * k)];
@@ -688,8 +788,7 @@
       var lcont = addGroupWithPath(leader, "Leader", [p0, p1, p2], false);
       var ltrim = lcont.addProperty("ADBE Vector Filter - Trim");
       ltrim.property("ADBE Vector Trim Start").setValue(0);
-      ltrim.property("ADBE Vector Trim End").expression =
-        preamble(i) + 'var lp=clamp((p-0.55)/0.45,0,1);lp=lp*lp*(3-2*lp);\nlp*100';
+      ltrim.property("ADBE Vector Trim End").expression = LP + 'lp*100';
       addStroke(lcont, 2 * k, labelColorExpr(), false);
 
       // --- external label ----------------------------------------------------
@@ -704,14 +803,11 @@
         ? '"' + escStr(it.label) + '  ' + escStr(formatStaticNumber(it.value, cfg.format)) + ' · "'
         : '"' + escStr(it.label) + '  "';
       lab.property("ADBE Text Properties").property("ADBE Text Document").expression =
-        preamble(i) +
-        'var lp=clamp((p-0.55)/0.45,0,1);lp=lp*lp*(3-2*lp);\n' +
-        valPart + '+(' + round3(pct) + '*lp).toFixed(1)+"%"';
-      lab.opacity.expression =
-        preamble(i) + 'var lp=clamp((p-0.55)/0.45,0,1);\nlp*100';
+        LP + valPart + '+(' + round3(pct) + '*lp).toFixed(1)+"%"';
+      lab.opacity.expression = LP + 'lp*100';
     }
 
-    // Optional highlight ring around the whole pie (STYLE | Outline Width).
+    // Darker outline ring around the pie's edge, drawn by the same sweep.
     var ring = addShapeItem(comp, ctrl, "Pie Outline Ring");
     ring.position.setValue([0, 0]);
     var rgrp = ring.property("ADBE Root Vectors Group").addProperty("ADBE Vector Group");
@@ -719,10 +815,13 @@
     var rcont = rgrp.property("ADBE Vectors Group");
     var rell = rcont.addProperty("ADBE Vector Shape - Ellipse");
     rell.property("ADBE Vector Ellipse Size").setValue([R * 2, R * 2]);
+    var rtrim = rcont.addProperty("ADBE Vector Filter - Trim");
+    rtrim.property("ADBE Vector Trim Start").setValue(0);
+    rtrim.property("ADBE Vector Trim End").expression = SWEEP + 'G*100';
     var rst = rcont.addProperty("ADBE Vector Graphic - Stroke");
     rst.property("ADBE Vector Stroke Width").expression = outlineWidthExpr();
     rst.property("ADBE Vector Stroke Color").expression = rampColorExpr(0, 0.55);
-    ring.opacity.expression = preamble(0) + 'Math.min(e,1)*100';
+    ring.opacity.expression = SWEEP + '(G>0)?100:0';
 
     buildTitle(comp, ctrl, cfg, 0, -R - 130 * k, k);
     return { k: k, r: R };
@@ -782,9 +881,11 @@
       // Markers reflect the timing in force right now (live values if the
       // controller already existed). Refreshed on every Update.
       var anim = readAnimValues(ctrl, cfg);
-      var lastIndex = cfg.type === "line" ? 0 : (cfg.items.length - 1);
       var startT = anim.delay;
-      var endT = anim.delay + anim.duration + anim.stagger * lastIndex + (cfg.type !== "bar" ? 0.4 : 0);
+      var endT;
+      if (cfg.type === "bar") endT = anim.delay + anim.duration + anim.stagger * (cfg.items.length - 1);
+      else if (cfg.type === "line") endT = anim.delay + anim.duration + 0.3; // label tail
+      else endT = anim.delay + anim.duration + 0.6; // pie: single sweep + label tail
       setMarkers(ctrl, startT, endT);
 
       storeData(ctrl, jsonStr);
