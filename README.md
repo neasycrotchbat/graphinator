@@ -32,7 +32,7 @@ Built for AE 2025 (25.x) on Windows; the manifest accepts AE 2019 (16.0) and up.
 | Master color, tone spread, label color | **`>> GRAPH CONTROLLER <<` layer** → Effect Controls (`COLOR |` / `STYLE |` groups) — live, no regeneration |
 | Build timing: delay, duration, stagger, easing | Controller layer → `ANIM |` effects — live |
 | Overall chart size | Controller layer → `SCALE | Overall Scale` — live |
-| Outline width, line weight, glow intensity | Controller layer → `STYLE |` effects — live (`Glow Intensity` 0 = off) |
+| Outline width, line weight, glow | Controller layer → `STYLE |` effects — live. `Glow Enabled` checkbox switches the whole glow stack off; `Glow Intensity` scales it |
 
 Rules of the road:
 
@@ -78,6 +78,27 @@ Rules of the road:
   prefix/suffix like `$`/`k`) or **percent of total with 1 decimal**, applied
   to value labels and axis ticks. Labels count up as the chart builds.
 
+### How the shading & glow work
+
+- **Glow** is a 3-tier "pro stack" per hero element (bars, line, pie slices):
+  tight core (threshold 65% / small radius / intensity 3), medium spread
+  (50% / medium radius / intensity 1), wide fall-off (80% / large radius /
+  intensity 0.5) — all in **Add** mode with **A & B colors** derived from the
+  item's tone. Dots get the core tier only, for render speed. The whole stack
+  is driven by two controller effects: `STYLE | Glow Enabled` (checkbox —
+  off kills every tier at once) and `STYLE | Glow Intensity` (multiplier).
+- **Gradients** — AE doesn't expose shape gradient *stop colors* to
+  scripting, so gradients are authored white→black (direction and start/end
+  points are scriptable, and the bar gradient's start point rides the growing
+  top edge via expression) and a **Tritone** effect on each layer remaps
+  luminance to that item's highlight/body/shadow tones. Tritone's colors are
+  expression-linked to the master color, so gradients stay fully live —
+  change `COLOR | Master Color` and every gradient follows. White artwork
+  (bar caps, pie rims) maps to the highlight tone; black outlines map to the
+  shadow tone. To retint one element manually, edit its Tritone colors.
+- **Line area fill** fades to transparent toward the baseline via a heavily
+  feathered Linear Wipe (gradient opacity stops aren't scriptable either).
+
 ### Limits (v1)
 
 - 2–60 data points, single series.
@@ -92,6 +113,14 @@ Rules of the road:
   Trim Paths > Offset to `-90°` on each slice.
 - **"EvalScript error"** — the JSX failed to load; make sure the whole folder
   (including `jsx/`) was copied.
+- **Bar gradient looks inverted (dark top, bright bottom)** — your AE created
+  the default gradient black→white instead of white→black; swap the
+  Highlights and Shadows colors on that layer's Tritone effect (or swap the
+  gradient's Start/End points).
+- **Line area fade is on the wrong edge** — set the area layer's
+  Linear Wipe > Wipe Angle to `180°`.
+- **Glow feels heavy on playback** — untick `STYLE | Glow Enabled` on the
+  controller while working, re-enable for renders.
 - Panel debugging: open `http://localhost:8092` in Chrome while the panel is
   open (port set in `.debug`).
 

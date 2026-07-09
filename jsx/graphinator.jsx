@@ -254,6 +254,7 @@
       ["ADBE Slider Control", "ANIM | Stagger", cfg.anim.stagger],
       ["ADBE Slider Control", "STYLE | Outline Width", 4],
       ["ADBE Slider Control", "STYLE | Line Weight", 8],
+      ["ADBE Checkbox Control", "STYLE | Glow Enabled", 1],
       ["ADBE Slider Control", "STYLE | Glow Intensity", 1],
       ["ADBE Color Control", "STYLE | Label Color", [0.95, 0.95, 0.95, 1]],
       ["ADBE Slider Control", "SCALE | Overall Scale", 100]
@@ -334,15 +335,65 @@
   function setFxValue(fx, m, d, v) { var p = findFxProp(fx, m, d); if (p) { try { p.setValue(v); } catch (e) {} } }
   function setFxExpr(fx, m, d, ex) { var p = findFxProp(fx, m, d); if (p) { try { p.expression = ex; } catch (e) {} } }
 
-  /* Soft neon glow, driven live by STYLE | Glow Intensity (0 = off). */
-  function addGlowFx(layer, radiusPx) {
+  function applyColorSafe(prop, spec) {
+    try { applyColor(prop, spec); } catch (e) {}
+  }
+
+  /* ---- Pro glow stack ----------------------------------------------------
+   * AE's single Glow is weak, so stack three: tight core, medium spread,
+   * wide fall-off — all in Add mode with A & B colors derived from the
+   * item's tone. Every tier is gated by STYLE | Glow Enabled and scaled by
+   * STYLE | Glow Intensity on the controller, so the whole stack switches
+   * off with one checkbox. */
+  function glowIntensityExpr(base) {
+    return 'var C=thisComp.layer("' + CTRL_NAME + '");\n' +
+      'var on=C.effect("STYLE | Glow Enabled")(1);\n' +
+      'var m=Math.max(C.effect("STYLE | Glow Intensity")(1),0);\n' +
+      'on>0?' + base + '*m:0';
+  }
+
+  function addOneGlow(layer, name, threshold, radius, baseIntensity, colorA, colorB) {
     try {
       var fx = fxParade(layer).addProperty("ADBE Glo2");
-      setFxValue(fx, "ADBE Glo2-0002", "Glow Threshold", 55);
-      setFxValue(fx, "ADBE Glo2-0003", "Glow Radius", radiusPx);
-      setFxExpr(fx, "ADBE Glo2-0004", "Glow Intensity",
-        'Math.max(thisComp.layer("' + CTRL_NAME + '").effect("STYLE | Glow Intensity")(1),0)');
+      fx.name = name;
+      setFxValue(fx, "ADBE Glo2-0002", "Glow Threshold", threshold);
+      setFxValue(fx, "ADBE Glo2-0003", "Glow Radius", radius);
+      setFxExpr(fx, "ADBE Glo2-0004", "Glow Intensity", glowIntensityExpr(baseIntensity));
+      setFxValue(fx, "ADBE Glo2-0006", "Glow Operation", 1); // Add
+      setFxValue(fx, "ADBE Glo2-0007", "Glow Colors", 2);    // A & B Colors
+      var pa = findFxProp(fx, "ADBE Glo2-0012", "Color A");
+      var pb = findFxProp(fx, "ADBE Glo2-0013", "Color B");
+      if (pa) applyColorSafe(pa, colorA);
+      if (pb) applyColorSafe(pb, colorB);
     } catch (err) { /* glow is decorative — skip if unavailable */ }
+  }
+
+  function addGlowStack(layer, k, colors, full) {
+    addOneGlow(layer, "Glow 1 — Tight Core", 65, 16 * k, 3.0, colors.highlight, colors.fill);
+    if (full) {
+      addOneGlow(layer, "Glow 2 — Medium Spread", 50, 100 * k, 1.0, colors.highlight, colors.fill);
+      addOneGlow(layer, "Glow 3 — Wide Fall-off", 80, 500 * k, 0.5, colors.highlight, colors.fill);
+    }
+  }
+
+  /* ---- Gradient shading ---------------------------------------------------
+   * Shape gradient STOP colors aren't scriptable, so gradients are drawn in
+   * plain white→black (geometry/direction IS scriptable) and a Tritone
+   * effect remaps luminance to this item's highlight/body/shadow tones —
+   * which are expression-linked to the master color, keeping gradients
+   * fully live. White art (caps, rims) maps to Highlights; black strokes
+   * map to Shadows. */
+  function addTritoneFx(layer, colors) {
+    try {
+      var fx = fxParade(layer).addProperty("ADBE Tritone");
+      fx.name = "Tone Map — drives gradient colors";
+      var hi = findFxProp(fx, "ADBE Tritone-0001", "Highlights");
+      var mid = findFxProp(fx, "ADBE Tritone-0002", "Midtones");
+      var sh = findFxProp(fx, "ADBE Tritone-0003", "Shadows");
+      if (hi) applyColorSafe(hi, colors.highlight);
+      if (mid) applyColorSafe(mid, colors.fill);
+      if (sh) applyColorSafe(sh, colors.outline);
+    } catch (err) {}
   }
 
   /* Fill effect so every label follows the controller's Label Color live. */
@@ -528,7 +579,7 @@
       hrect.property("ADBE Vector Rect Position").expression =
         preamble(i) + 'var hh=Math.max(' + round3(h) + '*e,0);\n[0,-hh+Math.min(' + round3(capH) + ',hh)/2]';
       var hfill = hcont.addProperty("ADBE Vector Graphic - Fill");
-      applyColor(hfill.property("ADBE Vector Fill Color"), colors.highlight);
+      hfill.property("ADBE Vector Fill Color").setValue([1, 1, 1, 1]); // → Highlights tone via Tritone
 
       var grp = bar.property("ADBE Root Vectors Group").addProperty("ADBE Vector Group");
       grp.name = "Bar";
@@ -538,13 +589,27 @@
         preamble(i) + '[' + round3(barW) + ',Math.max(' + round3(h) + '*e,0)]';
       rect.property("ADBE Vector Rect Position").expression =
         preamble(i) + '[0,-Math.max(' + round3(h) + '*e,0)/2]';
-      var fill = cont.addProperty("ADBE Vector Graphic - Fill");
-      applyColor(fill.property("ADBE Vector Fill Color"), colors.fill);
+      // True vertical gradient: a white→black gradient fill whose start
+      // point rides the growing top edge; Tritone maps it to this item's
+      // tones, live-linked to the master color.
+      var gfill = null;
+      try {
+        gfill = cont.addProperty("ADBE Vector Graphic - G-Fill");
+        try { gfill.property("ADBE Vector Grad Type").setValue(1); } catch (eT) {} // linear
+        gfill.property("ADBE Vector Grad Start Pt").expression =
+          preamble(i) + '[0,-Math.max(' + round3(h) + '*e,1)]';
+        gfill.property("ADBE Vector Grad End Pt").setValue([0, 0]);
+      } catch (eG) { gfill = null; }
+      if (!gfill) { // very old AE — flat fill fallback
+        var fill = cont.addProperty("ADBE Vector Graphic - Fill");
+        applyColor(fill.property("ADBE Vector Fill Color"), colors.fill);
+      }
       var st = cont.addProperty("ADBE Vector Graphic - Stroke");
       st.property("ADBE Vector Stroke Width").expression = outlineWidthExpr();
-      applyColor(st.property("ADBE Vector Stroke Color"), colors.outline);
+      st.property("ADBE Vector Stroke Color").setValue([0, 0, 0, 1]); // → Shadows tone via Tritone
 
-      addGlowFx(bar, 30 * k);
+      addTritoneFx(bar, colors);
+      addGlowStack(bar, k, colors, true);
 
       // --- count-up value label riding the top of the bar -----------------
       var vlab = addTextItem(comp, ctrl, "Value " + pad2(i + 1) + " — \"" + it.label + "\"",
@@ -618,7 +683,15 @@
     var acont = addGroupWithPath(area, "Area", apts, true);
     var afill = acont.addProperty("ADBE Vector Graphic - Fill");
     afill.property("ADBE Vector Fill Color").expression = rampColorExpr(0, 1);
-    area.opacity.expression = preamble(0) + 'Math.min(e,1)*18';
+    area.opacity.expression = preamble(0) + 'Math.min(e,1)*26';
+    // Soft alpha fade toward the baseline (gradient-fill opacity stops are
+    // not scriptable — a heavily feathered Linear Wipe does the same job).
+    try {
+      var wipe = fxParade(area).addProperty("ADBE Linear Wipe");
+      setFxValue(wipe, "ADBE Linear Wipe-0001", "Transition Completion", 35);
+      setFxValue(wipe, "ADBE Linear Wipe-0002", "Wipe Angle", 0);
+      setFxValue(wipe, "ADBE Linear Wipe-0003", "Feather", 700 * k);
+    } catch (eW) {}
 
     // --- the line -----------------------------------------------------------
     var line = addShapeItem(comp, ctrl, "Chart Line — \"" + cfg.seriesName + "\"");
@@ -632,7 +705,8 @@
       'thisComp.layer("' + CTRL_NAME + '").effect("STYLE | Line Weight")(1)';
     st.property("ADBE Vector Stroke Color").expression = rampColorExpr(0, 1);
     try { st.property("ADBE Vector Stroke Line Cap").setValue(2); } catch (eCap) {} // round
-    addGlowFx(line, 24 * k);
+    var lineColors = { fill: { expr: rampColorExpr(0, 1) }, highlight: { expr: rampColorExpr(0, 1.5) } };
+    addGlowStack(line, k, lineColors, true);
 
     // --- dots + labels -------------------------------------------------------
     for (i = 0; i < n; i++) {
@@ -658,7 +732,7 @@
       // pop with a little overshoot as the line arrives
       dot.scale.expression = popPre +
         'var s=1.70158,u=pp-1;var eb=1+(s+1)*u*u*u+s*u*u;\n[100*eb,100*eb]';
-      addGlowFx(dot, 12 * k);
+      addGlowStack(dot, k, colors, false); // core tier only — 3 glows × 60 dots would crawl
 
       var vlab = addTextItem(comp, ctrl, "Value " + pad2(i + 1) + " — \"" + it.label + "\"",
         formatStatic(it.value, cfg.format, total), 28 * k, ParagraphJustification.CENTER_JUSTIFY);
@@ -753,7 +827,7 @@
       rtrim2.property("ADBE Vector Trim End").expression = trimEndExpr;
       var rst2 = rcont2.addProperty("ADBE Vector Graphic - Stroke");
       rst2.property("ADBE Vector Stroke Width").setValue(rimW);
-      applyColor(rst2.property("ADBE Vector Stroke Color"), colors.highlight);
+      rst2.property("ADBE Vector Stroke Color").setValue([1, 1, 1, 1]); // → Highlights tone via Tritone
       try { rst2.property("ADBE Vector Stroke Line Cap").setValue(1); } catch (eCap1) {}
 
       var grp = slice.property("ADBE Root Vectors Group").addProperty("ADBE Vector Group");
@@ -764,14 +838,26 @@
       var trim = cont.addProperty("ADBE Vector Filter - Trim");
       trim.property("ADBE Vector Trim Start").setValue(c0 * 100);
       trim.property("ADBE Vector Trim End").expression = trimEndExpr;
-      var st = cont.addProperty("ADBE Vector Graphic - Stroke");
+      // Radial white→black gradient stroke (bright center, dark edge);
+      // Tritone maps it to this slice's tones, live via the master color.
+      var st = null;
+      try {
+        st = cont.addProperty("ADBE Vector Graphic - G-Stroke");
+        try { st.property("ADBE Vector Grad Type").setValue(2); } catch (eT2) {} // radial
+        try { st.property("ADBE Vector Grad Start Pt").setValue([0, 0]); } catch (eP1) {}
+        try { st.property("ADBE Vector Grad End Pt").setValue([R, 0]); } catch (eP2) {}
+      } catch (eGS) { st = null; }
+      if (!st) { // very old AE — flat stroke fallback
+        st = cont.addProperty("ADBE Vector Graphic - Stroke");
+        applyColor(st.property("ADBE Vector Stroke Color"), colors.fill);
+      }
       st.property("ADBE Vector Stroke Width").setValue(R);
-      applyColor(st.property("ADBE Vector Stroke Color"), colors.fill);
       try { st.property("ADBE Vector Stroke Line Cap").setValue(1); } catch (eCap) {} // butt = radial edges
 
       // Hidden until the sweep reaches this slice — nothing pre-renders.
       slice.opacity.expression = gateExpr;
-      addGlowFx(slice, 30 * k);
+      addTritoneFx(slice, colors);
+      addGlowStack(slice, k, colors, true);
 
       // Labels appear as the sweep crosses this slice's midpoint.
       var mid = round6(s.cum + s.frac / 2);
