@@ -17,6 +17,21 @@
 
 (function (global) {
 
+  // ------------------------------ FONT CONFIG ------------------------------
+  // Default typeface for all chart text. If your font shows a different
+  // family name in AE's Character panel, edit FONT_FAMILY here. Styles are
+  // matched per weight from the candidate lists (first installed style
+  // wins); Arial is the fallback when the family or AE's font API (24+)
+  // is unavailable.
+  var FONT_FAMILY = "Arthouse Owned";
+  var FONT_STYLE_CANDIDATES = {
+    regular: ["Regular", "Book", "Light", "Medium"],
+    medium:  ["Medium", "Regular", "Book"],
+    bold:    ["Bold", "Heavy", "Semibold", "SemiBold", "Demibold", "Black", "Medium"]
+  };
+  var FONT_FALLBACK_PS = { regular: "ArialMT", medium: "ArialMT", bold: "Arial-BoldMT" };
+  // --------------------------------------------------------------------------
+
   var CTRL_NAME = ">> GRAPH CONTROLLER <<";
   var ITEM_TAG = "GRAPHINATOR_ITEM";
   var CTRL_TAG = "GRAPHINATOR_CONTROLLER";
@@ -255,7 +270,7 @@
       ["ADBE Slider Control", "STYLE | Outline Width", 4],
       ["ADBE Slider Control", "STYLE | Line Weight", 8],
       ["ADBE Checkbox Control", "STYLE | Glow Enabled", 1],
-      ["ADBE Slider Control", "STYLE | Glow Intensity", 1],
+      ["ADBE Slider Control", "STYLE | Glow Intensity", 0.35],
       ["ADBE Color Control", "STYLE | Label Color", [0.95, 0.95, 0.95, 1]],
       ["ADBE Slider Control", "SCALE | Overall Scale", 100]
     ];
@@ -308,13 +323,42 @@
     return lay;
   }
 
-  function addTextItem(comp, ctrl, name, str, fontSize, justification) {
+  /* Resolve the configured family's PostScript names per weight via the
+   * font API (AE 24+). boldIsFaux flags a family with no real bold style,
+   * so bold text can fall back to synthetic bold. */
+  var CHART_FONTS = null;
+
+  function resolveFonts() {
+    var out = { boldIsFaux: false };
+    var weights = ["regular", "medium", "bold"];
+    for (var i = 0; i < weights.length; i++) {
+      var w = weights[i];
+      var ps = null;
+      var chosenStyle = null;
+      try {
+        var cands = FONT_STYLE_CANDIDATES[w];
+        for (var j = 0; j < cands.length && !ps; j++) {
+          var arr = app.fonts.getFontsByFamilyNameAndStyleName(FONT_FAMILY, cands[j]);
+          if (arr && arr.length > 0) { ps = arr[0].postScriptName; chosenStyle = cands[j]; }
+        }
+      } catch (e) { ps = null; }
+      if (w === "bold" && ps && chosenStyle === "Medium") out.boldIsFaux = true;
+      out[w] = ps || FONT_FALLBACK_PS[w];
+    }
+    return out;
+  }
+
+  function addTextItem(comp, ctrl, name, str, fontSize, justification, weight) {
     var lay = comp.layers.addText(str);
     lay.name = name;
     var tp = lay.property("ADBE Text Properties").property("ADBE Text Document");
     var td = tp.value;
     td.fontSize = fontSize;
-    try { td.font = "ArialMT"; } catch (eFont) {}
+    var w = weight || "medium";
+    try { td.font = CHART_FONTS[w]; } catch (eFont) {}
+    if (w === "bold" && CHART_FONTS.boldIsFaux) {
+      try { td.fauxBold = true; } catch (eFaux) {}
+    }
     td.applyFill = true;
     td.fillColor = [0.95, 0.95, 0.95];
     td.applyStroke = false;
@@ -498,14 +542,18 @@
       'var dly=C.effect("ANIM | Start Delay")(1);\n' +
       'clamp((time-inPoint-dly+0.25)/0.35,0,1)*100';
 
-    // Tick value labels (incl. zero at the baseline).
+    // Tick value labels (incl. zero at the baseline) — smallest and lightest
+    // tier of the type scale, muted to 80% so data labels stay dominant.
     for (var j2 = 0; j2 <= ticks; j2++) {
       var tv2 = step * j2;
       var y2 = base - geo.ph * (tv2 / niceMax);
       var lab = addTextItem(comp, ctrl, "Y Tick — " + formatStatic(tv2, fmt, total),
-        formatStatic(tv2, fmt, total), 22 * k, ParagraphJustification.RIGHT_JUSTIFY);
+        formatStatic(tv2, fmt, total), 22 * k, ParagraphJustification.RIGHT_JUSTIFY, "regular");
       lab.position.setValue([left - 16 * k, y2 + 8 * k]);
-      lab.opacity.expression = axes.opacity.expression;
+      lab.opacity.expression =
+        'var C=thisComp.layer("' + CTRL_NAME + '");\n' +
+        'var dly=C.effect("ANIM | Start Delay")(1);\n' +
+        'clamp((time-inPoint-dly+0.25)/0.35,0,1)*80';
     }
   }
 
@@ -526,7 +574,7 @@
     swatch.opacity.expression = 'clamp((time-inPoint)/0.4,0,1)*100';
 
     var lab = addTextItem(comp, ctrl, "Legend — \"" + cfg.seriesName + "\"",
-      cfg.seriesName, 28 * k, ParagraphJustification.LEFT_JUSTIFY);
+      cfg.seriesName, 26 * k, ParagraphJustification.LEFT_JUSTIFY, "medium");
     lab.position.setValue([geo.left + 34 * k, y + 9 * k]);
     lab.opacity.expression = 'clamp((time-inPoint)/0.4,0,1)*100';
   }
@@ -534,7 +582,7 @@
   function buildTitle(comp, ctrl, cfg, x, y, k) {
     if (!cfg.title) return;
     var lab = addTextItem(comp, ctrl, "Chart Title — \"" + cfg.title + "\"",
-      cfg.title, 52 * k, ParagraphJustification.CENTER_JUSTIFY);
+      cfg.title, 54 * k, ParagraphJustification.CENTER_JUSTIFY, "bold");
     lab.position.setValue([x, y]);
     lab.opacity.expression = 'clamp((time-inPoint)/0.4,0,1)*100';
   }
@@ -613,16 +661,16 @@
 
       // --- count-up value label riding the top of the bar -----------------
       var vlab = addTextItem(comp, ctrl, "Value " + pad2(i + 1) + " — \"" + it.label + "\"",
-        formatStatic(it.value, cfg.format, total), 30 * k, ParagraphJustification.CENTER_JUSTIFY);
+        formatStatic(it.value, cfg.format, total), 36 * k, ParagraphJustification.CENTER_JUSTIFY, "bold");
       vlab.position.expression =
-        preamble(i) + '[' + round3(x) + ',' + round3(geo.base) + '-Math.max(' + round3(h) + '*e,0)-' + round3(34 * k) + ']';
+        preamble(i) + '[' + round3(x) + ',' + round3(geo.base) + '-Math.max(' + round3(h) + '*e,0)-' + round3(38 * k) + ']';
       vlab.property("ADBE Text Properties").property("ADBE Text Document").expression =
         preamble(i) + countUpBody(it.value, total, cfg.format) + 'out';
       vlab.opacity.expression = preamble(i) + 'clamp(p*4,0,1)*100';
 
       // --- category label under the baseline -------------------------------
       var clab = addTextItem(comp, ctrl, "Category " + pad2(i + 1) + " — \"" + it.label + "\"",
-        it.label, 26 * k, ParagraphJustification.CENTER_JUSTIFY);
+        it.label, 27 * k, ParagraphJustification.CENTER_JUSTIFY, "medium");
       clab.position.setValue([x, geo.base + 44 * k]);
       clab.opacity.expression = preamble(i) + 'clamp(p*3,0,1)*100';
     }
@@ -735,14 +783,14 @@
       addGlowStack(dot, k, colors, false); // core tier only — 3 glows × 60 dots would crawl
 
       var vlab = addTextItem(comp, ctrl, "Value " + pad2(i + 1) + " — \"" + it.label + "\"",
-        formatStatic(it.value, cfg.format, total), 28 * k, ParagraphJustification.CENTER_JUSTIFY);
-      vlab.position.setValue([pts[i][0], pts[i][1] - 32 * k]);
+        formatStatic(it.value, cfg.format, total), 34 * k, ParagraphJustification.CENTER_JUSTIFY, "bold");
+      vlab.position.setValue([pts[i][0], pts[i][1] - 36 * k]);
       vlab.property("ADBE Text Properties").property("ADBE Text Document").expression =
         popPre + countUpBody(it.value, total, cfg.format, "pp") + 'out';
       vlab.opacity.expression = popPre + 'pp*100';
 
       var clab = addTextItem(comp, ctrl, "Category " + pad2(i + 1) + " — \"" + it.label + "\"",
-        it.label, 26 * k, ParagraphJustification.CENTER_JUSTIFY);
+        it.label, 27 * k, ParagraphJustification.CENTER_JUSTIFY, "medium");
       clab.position.setValue([pts[i][0], geo.base + 44 * k]);
       clab.opacity.expression = popPre + 'pp*100';
     }
@@ -795,8 +843,9 @@
       });
       cum += frac;
     }
-    resolveLabelCollisions(slices, 1, 38 * k, R + 140 * k);
-    resolveLabelCollisions(slices, -1, 38 * k, R + 140 * k);
+    // Labels are two lines tall (name + bold percent) — space accordingly.
+    resolveLabelCollisions(slices, 1, 86 * k, R + 140 * k);
+    resolveLabelCollisions(slices, -1, 86 * k, R + 140 * k);
 
     var rimW = 12 * k;
 
@@ -877,20 +926,26 @@
       ltrim.property("ADBE Vector Trim End").expression = LP + 'lp*100';
       addStroke(lcont, 2 * k, labelColorExpr(), false);
 
-      // --- external label ----------------------------------------------------
+      // --- external label: name (medium) over a bold count-up percent -------
       var just = s.side > 0 ? ParagraphJustification.LEFT_JUSTIFY : ParagraphJustification.RIGHT_JUSTIFY;
-      var staticTxt = it.label +
-        (cfg.pie.includeValue ? "  " + formatStaticNumber(it.value, cfg.format) + " ·" : " ") +
-        " " + pct.toFixed(1) + "%";
-      var lab = addTextItem(comp, ctrl, "Label " + pad2(i + 1) + " — " + niceName,
-        staticTxt, 28 * k, just);
-      lab.position.setValue([endX + s.side * 14 * k, s.labelY + 9 * k]);
+      var labX = endX + s.side * 14 * k;
+
+      var nameLab = addTextItem(comp, ctrl, "Label " + pad2(i + 1) + " — " + niceName,
+        it.label, 27 * k, just, "medium");
+      nameLab.position.setValue([labX, s.labelY + 2 * k]);
+      nameLab.opacity.expression = LP + 'lp*100';
+
+      var pctStatic = (cfg.pie.includeValue ? formatStaticNumber(it.value, cfg.format) + " · " : "") +
+        pct.toFixed(1) + "%";
+      var pctLab = addTextItem(comp, ctrl, "Value " + pad2(i + 1) + " — " + niceName,
+        pctStatic, 36 * k, just, "bold");
+      pctLab.position.setValue([labX, s.labelY + 42 * k]);
       var valPart = cfg.pie.includeValue
-        ? '"' + escStr(it.label) + '  ' + escStr(formatStaticNumber(it.value, cfg.format)) + ' · "'
-        : '"' + escStr(it.label) + '  "';
-      lab.property("ADBE Text Properties").property("ADBE Text Document").expression =
+        ? '"' + escStr(formatStaticNumber(it.value, cfg.format)) + ' · "'
+        : '""';
+      pctLab.property("ADBE Text Properties").property("ADBE Text Document").expression =
         LP + valPart + '+(' + round3(pct) + '*lp).toFixed(1)+"%"';
-      lab.opacity.expression = LP + 'lp*100';
+      pctLab.opacity.expression = LP + 'lp*100';
     }
 
     // Darker outline ring around the pie's edge, drawn by the same sweep.
@@ -954,6 +1009,7 @@
 
       var comp = getComp();
       var k = Math.min(comp.width / 1920, comp.height / 1080);
+      CHART_FONTS = resolveFonts();
 
       removeItems(comp);
       var res = ensureController(comp, cfg);

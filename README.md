@@ -99,6 +99,31 @@ Rules of the road:
 - **Line area fill** fades to transparent toward the baseline via a heavily
   feathered Linear Wipe (gradient opacity stops aren't scriptable either).
 
+### Typography
+
+Default typeface: **Arthouse Owned**, resolved per weight through AE's font
+API (AE 24+) with Arial as fallback. If the family name differs on your
+machine, edit `FONT_FAMILY` at the top of `jsx/graphinator.jsx`. If the
+family has no true Bold style, bold text falls back to the Medium style with
+synthetic (faux) bold.
+
+The scale follows chart-typography guidance from the
+[ONS data-visualisation service manual](https://service-manual.ons.gov.uk/data-visualisation/build-specifications/typography)
+and [Datawrapper](https://www.datawrapper.de/blog/fonts-for-data-visualization):
+one family, three weights, four sizes, with **values the loudest element
+after the title** and axis ticks the quietest:
+
+| Element | Size (at 1080p) | Weight |
+|---|---|---|
+| Chart title | 54 | Bold |
+| Value labels (bar/line/pie %) | 36 / 34 / 36 | Bold |
+| Category & axis labels, pie names | 27 | Medium |
+| Legend | 26 | Medium |
+| Y-axis ticks | 22 | Regular, 80% opacity |
+
+Pie labels are two lines: the name (medium) with the bold percent counting
+up beneath it. All sizes scale with comp resolution.
+
 ### Limits (v1)
 
 - 2–60 data points, single series.
