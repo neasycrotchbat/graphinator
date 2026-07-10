@@ -1,9 +1,12 @@
 # Graphinator
 
 An animated chart generator for Adobe After Effects, built as a CEP extension.
-Enter data in a dockable panel and generate polished, animated **bar**, **line**,
-and **pie** charts as native shape + text layers — then art-direct color, timing,
-and scale live in the comp without touching the panel again.
+Enter data in a dockable panel and generate polished, animated **bar**
+(vertical or horizontal), **line**, **area**, and **pie/donut** charts as
+native shape + text layers — then art-direct color, timing, and scale live in
+the comp without touching the panel again. Supports up to 5 series on
+bar/line/area, negative values, CSV import, style presets, an in-panel
+preview, animate-out, and one-click baking of the whole rig to keyframes.
 
 Built for AE 2025 (25.x) on Windows; the manifest accepts AE 2019 (16.0) and up.
 
@@ -31,6 +34,8 @@ Built for AE 2025 (25.x) on Windows; the manifest accepts AE 2019 (16.0) and up.
 | Data points, labels, chart type, number format, title | **The Graphinator panel** → edit → **Generate / Update Chart** |
 | Master color, tone spread, label color | **`>> GRAPH CONTROLLER <<` layer** → Effect Controls (`COLOR |` / `STYLE |` groups) — live, no regeneration |
 | Build timing: delay, duration, stagger, easing | Controller layer → `ANIM |` effects — live |
+| Animate-out on/off + duration | Controller layer → `ANIM | Out Enabled` / `Out Duration` — live; the chart reverses out so it finishes leaving at its layers' out point (trim the layers to set the exit time) |
+| Donut hole size | Controller layer → `STYLE | Donut Hole %` — live, 0 = solid pie |
 | Overall chart size | Controller layer → `SCALE | Overall Scale` — live |
 | Outline width, line weight, glow | Controller layer → `STYLE |` effects — live. `Glow Enabled` checkbox switches the whole glow stack off; `Glow Intensity` scales it |
 
@@ -65,19 +70,25 @@ Rules of the road:
 
 ### Chart-type notes
 
-- **Bar** — bars grow from the baseline with stagger, each with a bright
-  top-cap highlight and soft glow; count-up value labels ride the bar tops;
-  category labels fade in underneath. Axes, gridlines, and a legend are
-  generated with them.
+- **Bar** — vertical or horizontal, grouped when there are multiple series,
+  negative values supported (bars grow from the zero line). Bars grow with
+  stagger, each with a bright tip-cap highlight and soft glow; count-up value
+  labels ride the bar tips; category labels fade in. Axes, gridlines, a zero
+  line, and a legend are generated with them.
 - **Line** — draws on via trim paths with a glow and a soft area fill fading
   in underneath; glossy dots and per-point value labels pop in as the line
-  passes each point.
-- **Pie** — the whole pie reveals in **one continuous radial sweep from
-  12 o'clock**, each wedge growing adjacent to the last; nothing is visible
-  before the sweep reaches it. Slices get a bright outer rim highlight and
-  glow. All labels sit **outside** the pie with leader lines (so thin slivers
-  stay readable), stacked apart automatically when slices are thin. Optional
-  largest-first sorting and raw-value-in-label toggles in the panel.
+  passes each point. Multiple series draw with staggered timing, one tone
+  per series.
+- **Area** — the line chart with the filled area promoted to the star of the
+  show (higher fill opacity, same animation).
+- **Pie / Donut** — the whole pie reveals in **one continuous radial sweep
+  from 12 o'clock**, each wedge growing adjacent to the last; nothing is
+  visible before the sweep reaches it. `STYLE | Donut Hole %` on the
+  controller turns it into a donut live. Slices get a bright outer rim
+  highlight and glow. All labels sit **outside** the pie with leader lines
+  (so thin slivers stay readable), stacked apart automatically when slices
+  are thin. Optional largest-first sorting and raw-value-in-label toggles in
+  the panel.
 - **Number formats** — plain numbers (decimals, thousands separator,
   prefix/suffix like `$`/`k`) or **percent of total with 1 decimal**, applied
   to value labels and axis ticks. Labels count up as the chart builds.
@@ -138,10 +149,35 @@ each layer type gets its own timeline label color (values yellow, categories
 peach, geometry blue, leaders aqua, ticks sandstone, axes brown, legend
 green, title red, controller purple).
 
-### Limits (v1)
+### Data, import & presets
 
-- 2–60 data points, single series.
-- Values must be ≥ 0 (pie: > 0).
+- The Data section has two tabs: **Bar/Line/Area** (categories × up to 5
+  series — use *+ Series* / *− Series*) and **Pie** (label + value). The tab
+  follows the chart type; **⇄ Copy** seeds one from the other.
+- **Import CSV…** or **Paste…** accept `Label, Value [, Value2, …]` rows —
+  comma or tab separated, quoted cells OK, with an optional header row that
+  names the series. The Pie tab imports the first two columns.
+- **Show value labels** (Number Format section) toggles the count-up labels
+  on bars and points.
+- **Style Presets** save/apply the panel's color, format, pie, and animation
+  settings (not data) under a name, stored with the panel.
+- The in-panel **Preview** shows an approximate final frame of the chart as
+  you type; the real look (gradients, glow, fonts) comes from AE.
+
+### Bake to Keyframes
+
+The live rig re-evaluates expressions every frame, which can get heavy on
+large charts. When a chart is final, press **Bake to Keyframes**: static
+expressions (colors, widths, glow) freeze to their current values and
+animated ones are sampled per frame across the build (and animate-out)
+windows into plain keyframes. The result is a fast, expression-free chart —
+the controller no longer drives it. Press **Update** any time to rebuild the
+live rig.
+
+### Limits
+
+- 2–60 data points; up to 5 series on bar/line/area.
+- Negative values OK on bar/line/area; pie needs every value > 0.
 - One chart per comp — Update replaces the chart in the active comp.
 
 ## Troubleshooting

@@ -158,7 +158,25 @@
       ' u-=2.625/d1;return n1*u*u+0.984375;\n' +
       '}\n' +
       'var p=clamp((time-inPoint-dly-' + index + '*stag)/dur,0,1);\n' +
-      'var e=easeP(p);\n';
+      // Animate-out: a shared factor that reverses the build so the chart
+      // finishes leaving exactly at the layer's out point.
+      'var oEn=C.effect("ANIM | Out Enabled")(1);\n' +
+      'var oDur=Math.max(C.effect("ANIM | Out Duration")(1),0.01);\n' +
+      'var o=(oEn>0)?easeP(clamp((outPoint-time)/oDur,0,1)):1;\n' +
+      'var e=easeP(p)*o;\n';
+  }
+
+  /* Fade for static furniture (axes, ticks, legend, title): in at the start,
+   * out with the animate-out window. mult lets ticks sit muted at 80. */
+  function staticFadeExpr(useDelay, mult) {
+    return 'var C=thisComp.layer("' + CTRL_NAME + '");\n' +
+      (useDelay ? 'var dly=C.effect("ANIM | Start Delay")(1);\n' : '') +
+      'var oEn=C.effect("ANIM | Out Enabled")(1);\n' +
+      'var oDur=Math.max(C.effect("ANIM | Out Duration")(1),0.01);\n' +
+      'var o=(oEn>0)?clamp((outPoint-time)/oDur,0,1):1;\n' +
+      (useDelay
+        ? 'clamp((time-inPoint-dly+0.25)/0.35,0,1)*o*' + mult
+        : 'clamp((time-inPoint)/0.4,0,1)*o*' + mult);
   }
 
   /* Live color ramp: derive this item's tone from the master color.
@@ -287,6 +305,9 @@
       ["ADBE Slider Control", "ANIM | Start Delay", cfg.anim.delay],
       ["ADBE Slider Control", "ANIM | Build Duration", cfg.anim.duration],
       ["ADBE Slider Control", "ANIM | Stagger", cfg.anim.stagger],
+      ["ADBE Checkbox Control", "ANIM | Out Enabled", cfg.anim.outEnabled ? 1 : 0],
+      ["ADBE Slider Control", "ANIM | Out Duration", cfg.anim.outDuration || 1],
+      ["ADBE Slider Control", "STYLE | Donut Hole %", (cfg.pie && cfg.pie.donutHole) || 0],
       ["ADBE Slider Control", "STYLE | Outline Width", 4],
       ["ADBE Slider Control", "STYLE | Line Weight", 8],
       ["ADBE Checkbox Control", "STYLE | Glow Enabled", 1],
@@ -536,69 +557,143 @@
 
   // =================================================== axes / grid / text
 
-  function buildAxesAndTicks(comp, ctrl, geo, niceMax, step, fmt, total) {
+  /* Normalize bar/line/area data to {categories, series, overrides}.
+   * Accepts the v2 shape (categories + series[]) or legacy items[]. */
+  function normalizeSeries(cfg) {
+    if (cfg.series && cfg.categories) {
+      return {
+        categories: cfg.categories,
+        series: cfg.series,
+        overrides: cfg.pointOverrides || []
+      };
+    }
+    var cats = [], vals = [], ovr = [];
+    for (var i = 0; i < cfg.items.length; i++) {
+      cats.push(cfg.items[i].label);
+      vals.push(cfg.items[i].value);
+      ovr.push({ useCustom: !!cfg.items[i].useCustom, color: cfg.items[i].color });
+    }
+    return { categories: cats, series: [{ name: cfg.seriesName || "Series 1", values: vals }], overrides: ovr };
+  }
+
+  /* Value-axis range covering all series, negatives included, snapped to a
+   * nice step and always spanning zero. */
+  function computeAxis(seriesArr) {
+    var maxV = 0, minV = 0;
+    for (var j = 0; j < seriesArr.length; j++) {
+      var vv = seriesArr[j].values;
+      for (var i = 0; i < vv.length; i++) {
+        if (vv[i] > maxV) maxV = vv[i];
+        if (vv[i] < minV) minV = vv[i];
+      }
+    }
+    if (maxV === 0 && minV === 0) maxV = 1;
+    var step = niceStep(maxV - minV, 5);
+    var niceMax = Math.ceil(maxV / step) * step;
+    var niceMin = Math.floor(minV / step) * step;
+    if (niceMax === niceMin) niceMax = niceMin + step;
+    return { min: niceMin, max: niceMax, step: step, range: niceMax - niceMin };
+  }
+
+  function grandTotal(seriesArr) {
+    var t = 0;
+    for (var j = 0; j < seriesArr.length; j++) {
+      for (var i = 0; i < seriesArr[j].values.length; i++) t += seriesArr[j].values[i];
+    }
+    return t === 0 ? 1 : t;
+  }
+
+  /* Color spec (fill/outline/highlight) for a series datum: per-point tones
+   * in single-series mode (with per-point overrides), per-series tones when
+   * there are multiple series. */
+  function seriesColorSpec(data, i, j) {
+    var m = data.series.length, n = data.categories.length;
+    if (m === 1 && data.overrides[i] && data.overrides[i].useCustom) {
+      var rgb = hexToRgb(data.overrides[i].color);
+      return { fill: { value: [rgb[0], rgb[1], rgb[2], 1] },
+               outline: { value: [rgb[0] * 0.55, rgb[1] * 0.55, rgb[2] * 0.55, 1] },
+               highlight: { value: [Math.min(rgb[0] * 1.5 + 0.08, 1), Math.min(rgb[1] * 1.5 + 0.08, 1), Math.min(rgb[2] * 1.5 + 0.08, 1), 1] } };
+    }
+    var t = m > 1 ? itemTone(j, m) : itemTone(i, n);
+    return { fill: { expr: rampColorExpr(t, 1) },
+             outline: { expr: rampColorExpr(t, 0.55) },
+             highlight: { expr: rampColorExpr(t, 1.5) } };
+  }
+
+  /* Gridlines, zero line, borders, and tick labels along the value axis.
+   * horizontal=false → value axis is Y (ticks left); true → X (ticks below). */
+  function buildValueAxis(comp, ctrl, geo, axis, fmt, total, horizontal) {
     var left = geo.left, right = geo.right, base = geo.base, top = geo.top, k = geo.k;
 
     var axes = addShapeItem(comp, ctrl, "Axes & Gridlines", LC.axes);
     axes.position.setValue([0, 0]);
 
-    // Gridlines (behind everything else in this layer's stacking).
-    var ticks = Math.max(1, Math.round(niceMax / step));
-    for (var j = 1; j <= ticks; j++) {
-      var tv = step * j;
-      var y = base - geo.ph * (tv / niceMax);
-      var cont = addGroupWithPath(axes, "Gridline " + formatStatic(tv, fmt, total), [[left, y], [right, y]], false);
-      var st = addStroke(cont, 2 * k, labelColorExpr(), false);
-      st.property("ADBE Vector Stroke Opacity").setValue(22);
+    var ticks = Math.max(1, Math.round(axis.range / axis.step));
+    var j, tv, cont, st;
+    for (j = 0; j <= ticks; j++) {
+      tv = axis.min + axis.step * j;
+      var frac = (tv - axis.min) / axis.range;
+      var pathPts = horizontal
+        ? [[left + geo.pw * frac, top], [left + geo.pw * frac, base]]
+        : [[left, base - geo.ph * frac], [right, base - geo.ph * frac]];
+      var isZero = Math.abs(tv) < axis.step * 0.001;
+      cont = addGroupWithPath(axes, (isZero ? "Zero Line " : "Gridline ") + formatStatic(tv, fmt, total), pathPts, false);
+      st = addStroke(cont, (isZero ? 3 : 2) * k, labelColorExpr(), false);
+      if (!isZero) st.property("ADBE Vector Stroke Opacity").setValue(22);
     }
 
-    // Axis lines.
-    var contY = addGroupWithPath(axes, "Y Axis", [[left, base], [left, top]], false);
-    addStroke(contY, 3 * k, labelColorExpr(), false);
-    var contX = addGroupWithPath(axes, "Baseline (X Axis)", [[left, base], [right, base]], false);
-    addStroke(contX, 3 * k, labelColorExpr(), false);
+    // Category-axis border.
+    var borderPts = horizontal
+      ? [[left, base], [left, top]]
+      : [[left, base], [right, base]];
+    cont = addGroupWithPath(axes, "Category Axis", borderPts, false);
+    st = addStroke(cont, 2 * k, labelColorExpr(), false);
+    st.property("ADBE Vector Stroke Opacity").setValue(60);
 
-    // Axes fade in just before the build starts.
-    axes.opacity.expression =
-      'var C=thisComp.layer("' + CTRL_NAME + '");\n' +
-      'var dly=C.effect("ANIM | Start Delay")(1);\n' +
-      'clamp((time-inPoint-dly+0.25)/0.35,0,1)*100';
+    axes.opacity.expression = staticFadeExpr(true, 100);
 
-    // Tick value labels (incl. zero at the baseline) — smallest and lightest
-    // tier of the type scale, muted to 80% so data labels stay dominant.
-    for (var j2 = 0; j2 <= ticks; j2++) {
-      var tv2 = step * j2;
-      var y2 = base - geo.ph * (tv2 / niceMax);
-      var lab = addTextItem(comp, ctrl, "Y Tick — " + formatStatic(tv2, fmt, total),
-        formatStatic(tv2, fmt, total), 22 * k, ParagraphJustification.RIGHT_JUSTIFY, "regular", LC.tick);
-      lab.position.setValue([left - 16 * k, y2 + 8 * k]);
-      lab.opacity.expression =
-        'var C=thisComp.layer("' + CTRL_NAME + '");\n' +
-        'var dly=C.effect("ANIM | Start Delay")(1);\n' +
-        'clamp((time-inPoint-dly+0.25)/0.35,0,1)*80';
+    // Tick value labels — the quietest tier of the type scale.
+    for (j = 0; j <= ticks; j++) {
+      tv = axis.min + axis.step * j;
+      var frac2 = (tv - axis.min) / axis.range;
+      var lab = addTextItem(comp, ctrl, "Tick — " + formatStatic(tv, fmt, total),
+        formatStatic(tv, fmt, total), 22 * k,
+        horizontal ? ParagraphJustification.CENTER_JUSTIFY : ParagraphJustification.RIGHT_JUSTIFY,
+        "regular", LC.tick);
+      if (horizontal) lab.position.setValue([left + geo.pw * frac2, base + 36 * k]);
+      else lab.position.setValue([left - 16 * k, base - geo.ph * frac2 + 8 * k]);
+      lab.opacity.expression = staticFadeExpr(true, 80);
     }
   }
 
-  function buildLegend(comp, ctrl, geo, cfg) {
+  /* One swatch + name per series, laid out left-to-right above the plot. */
+  function buildLegend(comp, ctrl, geo, data) {
     var k = geo.k;
+    var m = data.series.length;
     var y = geo.top - 52 * k;
+    var spacing = 260 * k;
 
-    var swatch = addShapeItem(comp, ctrl, "Legend Swatch", LC.legend);
-    swatch.position.setValue([geo.left + 13 * k, y]);
-    var grp = swatch.property("ADBE Root Vectors Group").addProperty("ADBE Vector Group");
-    grp.name = "Swatch";
-    var cont = grp.property("ADBE Vectors Group");
-    var rect = cont.addProperty("ADBE Vector Shape - Rect");
-    rect.property("ADBE Vector Rect Size").setValue([26 * k, 26 * k]);
-    rect.property("ADBE Vector Rect Roundness").setValue(6 * k);
-    var fill = cont.addProperty("ADBE Vector Graphic - Fill");
-    fill.property("ADBE Vector Fill Color").expression = rampColorExpr(0, 1);
-    swatch.opacity.expression = 'clamp((time-inPoint)/0.4,0,1)*100';
+    for (var j = m - 1; j >= 0; j--) {
+      var x0 = geo.left + j * spacing;
+      var tone = m > 1 ? itemTone(j, m) : 0;
 
-    var lab = addTextItem(comp, ctrl, "Legend — \"" + cfg.seriesName + "\"",
-      cfg.seriesName, 26 * k, ParagraphJustification.LEFT_JUSTIFY, "medium", LC.legend);
-    lab.position.setValue([geo.left + 34 * k, y + 9 * k]);
-    lab.opacity.expression = 'clamp((time-inPoint)/0.4,0,1)*100';
+      var swatch = addShapeItem(comp, ctrl, "Legend Swatch — \"" + data.series[j].name + "\"", LC.legend);
+      swatch.position.setValue([x0 + 13 * k, y]);
+      var grp = swatch.property("ADBE Root Vectors Group").addProperty("ADBE Vector Group");
+      grp.name = "Swatch";
+      var cont = grp.property("ADBE Vectors Group");
+      var rect = cont.addProperty("ADBE Vector Shape - Rect");
+      rect.property("ADBE Vector Rect Size").setValue([26 * k, 26 * k]);
+      rect.property("ADBE Vector Rect Roundness").setValue(6 * k);
+      var fill = cont.addProperty("ADBE Vector Graphic - Fill");
+      fill.property("ADBE Vector Fill Color").expression = rampColorExpr(tone, 1);
+      swatch.opacity.expression = staticFadeExpr(false, 100);
+
+      var lab = addTextItem(comp, ctrl, "Legend — \"" + data.series[j].name + "\"",
+        data.series[j].name, 26 * k, ParagraphJustification.LEFT_JUSTIFY, "medium", LC.legend);
+      lab.position.setValue([x0 + 34 * k, y + 9 * k]);
+      lab.opacity.expression = staticFadeExpr(false, 100);
+    }
   }
 
   function buildTitle(comp, ctrl, cfg, x, y, k) {
@@ -606,250 +701,343 @@
     var lab = addTextItem(comp, ctrl, "Chart Title — \"" + cfg.title + "\"",
       cfg.title, 54 * k, ParagraphJustification.CENTER_JUSTIFY, "bold", LC.title);
     lab.position.setValue([x, y]);
-    lab.opacity.expression = 'clamp((time-inPoint)/0.4,0,1)*100';
+    lab.opacity.expression = staticFadeExpr(false, 100);
   }
 
   // ============================================================ bar chart
 
+  /* One bar (tip cap + gradient body + outline + tone map + glow). Works
+   * for both orientations and signed (negative) values. */
+  function buildOneBar(comp, ctrl, name, pos, len, thick, horizontal, idx, colors, k) {
+    var A = round3(Math.abs(len));
+    var S = len < 0 ? -1 : 1;
+    var capH = round3(12 * k);
+    var bar = addShapeItem(comp, ctrl, name, LC.bar);
+    bar.position.setValue(pos);
+
+    // Bright cap riding the growing tip (added first = renders in front).
+    // Its length is capped by the bar's own so nothing shows pre-build.
+    var hgrp = bar.property("ADBE Root Vectors Group").addProperty("ADBE Vector Group");
+    hgrp.name = "Tip Highlight";
+    var hcont = hgrp.property("ADBE Vectors Group");
+    var hrect = hcont.addProperty("ADBE Vector Shape - Rect");
+    var capLen = 'Math.min(' + capH + ',' + A + '*e)';
+    if (horizontal) {
+      hrect.property("ADBE Vector Rect Size").expression =
+        preamble(idx) + '[' + capLen + ',' + round3(thick * 0.9) + ']';
+      hrect.property("ADBE Vector Rect Position").expression =
+        preamble(idx) + '[' + S + '*(' + A + '*e-' + capLen + '/2),0]';
+    } else {
+      hrect.property("ADBE Vector Rect Size").expression =
+        preamble(idx) + '[' + round3(thick * 0.9) + ',' + capLen + ']';
+      hrect.property("ADBE Vector Rect Position").expression =
+        preamble(idx) + '[0,' + (-S) + '*(' + A + '*e-' + capLen + '/2)]';
+    }
+    var hfill = hcont.addProperty("ADBE Vector Graphic - Fill");
+    hfill.property("ADBE Vector Fill Color").setValue([1, 1, 1, 1]); // → Highlights tone via Tritone
+
+    var grp = bar.property("ADBE Root Vectors Group").addProperty("ADBE Vector Group");
+    grp.name = "Bar";
+    var cont = grp.property("ADBE Vectors Group");
+    var rect = cont.addProperty("ADBE Vector Shape - Rect");
+    if (horizontal) {
+      rect.property("ADBE Vector Rect Size").expression =
+        preamble(idx) + '[Math.max(' + A + '*e,0),' + round3(thick) + ']';
+      rect.property("ADBE Vector Rect Position").expression =
+        preamble(idx) + '[' + S + '*Math.max(' + A + '*e,0)/2,0]';
+    } else {
+      rect.property("ADBE Vector Rect Size").expression =
+        preamble(idx) + '[' + round3(thick) + ',Math.max(' + A + '*e,0)]';
+      rect.property("ADBE Vector Rect Position").expression =
+        preamble(idx) + '[0,' + (-S) + '*Math.max(' + A + '*e,0)/2]';
+    }
+    // White→black gradient toward the tip; Tritone supplies the live tones.
+    var gfill = null;
+    try {
+      gfill = cont.addProperty("ADBE Vector Graphic - G-Fill");
+      try { gfill.property("ADBE Vector Grad Type").setValue(1); } catch (eT) {} // linear
+      gfill.property("ADBE Vector Grad Start Pt").expression = preamble(idx) +
+        (horizontal ? '[' + S + '*Math.max(' + A + '*e,1),0]' : '[0,' + (-S) + '*Math.max(' + A + '*e,1)]');
+      gfill.property("ADBE Vector Grad End Pt").setValue([0, 0]);
+    } catch (eG) { gfill = null; }
+    if (!gfill) { // very old AE — flat fill fallback
+      var fill = cont.addProperty("ADBE Vector Graphic - Fill");
+      applyColor(fill.property("ADBE Vector Fill Color"), colors.fill);
+    }
+    var st = cont.addProperty("ADBE Vector Graphic - Stroke");
+    st.property("ADBE Vector Stroke Width").expression = outlineWidthExpr();
+    st.property("ADBE Vector Stroke Color").setValue([0, 0, 0, 1]); // → Shadows tone via Tritone
+
+    addTritoneFx(bar, colors);
+    addGlowStack(bar, k, colors, true);
+    return bar;
+  }
+
   function buildBar(comp, ctrl, cfg, k) {
-    var n = cfg.items.length;
+    var data = normalizeSeries(cfg);
+    var n = data.categories.length;
+    var m = data.series.length;
+    var horiz = !!(cfg.bar && cfg.bar.horizontal);
     var pw = 1440 * k, ph = 700 * k;
     var geo = { pw: pw, ph: ph, left: -pw / 2, right: pw / 2, base: ph / 2, top: -ph / 2, k: k };
 
-    var total = sum(cfg.items);
-    var step = niceStep(maxVal(cfg.items), 5);
-    var niceMax = Math.ceil(maxVal(cfg.items) / step) * step;
-    if (niceMax <= 0) niceMax = 1;
+    var axis = computeAxis(data.series);
+    var total = grandTotal(data.series);
+    buildValueAxis(comp, ctrl, geo, axis, cfg.format, total, horiz);
 
-    buildAxesAndTicks(comp, ctrl, geo, niceMax, step, cfg.format, total);
+    var showValues = !cfg.format || cfg.format.showValues !== false;
+    var slot = (horiz ? ph : pw) / n;
+    var groupLen = slot * (m > 1 ? 0.78 : 0.62);
+    var thickSlot = groupLen / m;
+    var thick = thickSlot * (m > 1 ? 0.88 : 1);
+    var zeroFrac = (0 - axis.min) / axis.range;
+    var zeroY = geo.base - ph * zeroFrac;
+    var zeroX = geo.left + pw * zeroFrac;
+    var vSize = horiz ? (m === 1 ? 40 : m === 2 ? 30 : 24) * k
+                      : (m === 1 ? 72 : m === 2 ? 38 : 28) * k;
 
-    var slot = pw / n;
-    var barW = slot * 0.62;
+    var i, j, v, idx, colors;
 
-    // Layers are created bottom-up in organized blocks — bars, then
-    // category labels, then value labels — so the timeline reads as tidy
-    // groups instead of interleaved per-bar layers. Reverse order within
-    // each block keeps 01 at the top of its group.
-    for (var i = n - 1; i >= 0; i--) {
-      var it = cfg.items[i];
-      var x = geo.left + slot * (i + 0.5);
-      var h = ph * (it.value / niceMax);
-      var colors = itemFillColorSpec(cfg, i, n);
-
-      // --- the bar itself -------------------------------------------------
-      var bar = addShapeItem(comp, ctrl, "Bar " + pad2(i + 1) + " — \"" + it.label + "\"", LC.bar);
-      bar.position.setValue([x, geo.base]);
-
-      // Bright cap along the growing top edge (added first = renders in
-      // front). Its height is capped by the bar's own height so nothing
-      // shows before the build starts.
-      var capH = 12 * k;
-      var hgrp = bar.property("ADBE Root Vectors Group").addProperty("ADBE Vector Group");
-      hgrp.name = "Top Highlight";
-      var hcont = hgrp.property("ADBE Vectors Group");
-      var hrect = hcont.addProperty("ADBE Vector Shape - Rect");
-      hrect.property("ADBE Vector Rect Size").expression =
-        preamble(i) + 'var hh=Math.max(' + round3(h) + '*e,0);\n[' + round3(barW * 0.9) + ',Math.min(' + round3(capH) + ',hh)]';
-      hrect.property("ADBE Vector Rect Position").expression =
-        preamble(i) + 'var hh=Math.max(' + round3(h) + '*e,0);\n[0,-hh+Math.min(' + round3(capH) + ',hh)/2]';
-      var hfill = hcont.addProperty("ADBE Vector Graphic - Fill");
-      hfill.property("ADBE Vector Fill Color").setValue([1, 1, 1, 1]); // → Highlights tone via Tritone
-
-      var grp = bar.property("ADBE Root Vectors Group").addProperty("ADBE Vector Group");
-      grp.name = "Bar";
-      var cont = grp.property("ADBE Vectors Group");
-      var rect = cont.addProperty("ADBE Vector Shape - Rect");
-      rect.property("ADBE Vector Rect Size").expression =
-        preamble(i) + '[' + round3(barW) + ',Math.max(' + round3(h) + '*e,0)]';
-      rect.property("ADBE Vector Rect Position").expression =
-        preamble(i) + '[0,-Math.max(' + round3(h) + '*e,0)/2]';
-      // True vertical gradient: a white→black gradient fill whose start
-      // point rides the growing top edge; Tritone maps it to this item's
-      // tones, live-linked to the master color.
-      var gfill = null;
-      try {
-        gfill = cont.addProperty("ADBE Vector Graphic - G-Fill");
-        try { gfill.property("ADBE Vector Grad Type").setValue(1); } catch (eT) {} // linear
-        gfill.property("ADBE Vector Grad Start Pt").expression =
-          preamble(i) + '[0,-Math.max(' + round3(h) + '*e,1)]';
-        gfill.property("ADBE Vector Grad End Pt").setValue([0, 0]);
-      } catch (eG) { gfill = null; }
-      if (!gfill) { // very old AE — flat fill fallback
-        var fill = cont.addProperty("ADBE Vector Graphic - Fill");
-        applyColor(fill.property("ADBE Vector Fill Color"), colors.fill);
+    // Bars, series by series — tidy blocks in the timeline, 01 on top.
+    // Stagger runs across categories with a small offset between series.
+    for (j = m - 1; j >= 0; j--) {
+      for (i = n - 1; i >= 0; i--) {
+        v = data.series[j].values[i];
+        idx = round3(i + j * 0.25);
+        colors = seriesColorSpec(data, i, j);
+        var name = "Bar " + pad2(i + 1) + (m > 1 ? "." + (j + 1) : "") + " — \"" + data.categories[i] + "\"" +
+          (m > 1 ? " · " + data.series[j].name : "");
+        var off = slot * (i + 0.5) - groupLen / 2 + thickSlot * (j + 0.5);
+        if (horiz) {
+          buildOneBar(comp, ctrl, name, [zeroX, geo.top + off], pw * v / axis.range, thick, true, idx, colors, k);
+        } else {
+          buildOneBar(comp, ctrl, name, [geo.left + off, zeroY], ph * v / axis.range, thick, false, idx, colors, k);
+        }
       }
-      var st = cont.addProperty("ADBE Vector Graphic - Stroke");
-      st.property("ADBE Vector Stroke Width").expression = outlineWidthExpr();
-      st.property("ADBE Vector Stroke Color").setValue([0, 0, 0, 1]); // → Shadows tone via Tritone
-
-      addTritoneFx(bar, colors);
-      addGlowStack(bar, k, colors, true);
     }
 
-    // --- category labels under the baseline (own block in the timeline) ----
-    for (var i2 = n - 1; i2 >= 0; i2--) {
-      var itC = cfg.items[i2];
-      var clab = addTextItem(comp, ctrl, "Category " + pad2(i2 + 1) + " — \"" + itC.label + "\"",
-        itC.label, 27 * k, ParagraphJustification.CENTER_JUSTIFY, "medium", LC.category);
-      clab.position.setValue([geo.left + slot * (i2 + 0.5), geo.base + 44 * k]);
-      clab.opacity.expression = preamble(i2) + 'clamp(p*3,0,1)*100';
+    // Category labels — under the plot (vertical) / left of it (horizontal).
+    for (i = n - 1; i >= 0; i--) {
+      var clab = addTextItem(comp, ctrl, "Category " + pad2(i + 1) + " — \"" + data.categories[i] + "\"",
+        data.categories[i], 27 * k,
+        horiz ? ParagraphJustification.RIGHT_JUSTIFY : ParagraphJustification.CENTER_JUSTIFY,
+        "medium", LC.category);
+      if (horiz) clab.position.setValue([geo.left - 16 * k, geo.top + slot * (i + 0.5) + 8 * k]);
+      else clab.position.setValue([geo.left + slot * (i + 0.5), geo.base + 44 * k]);
+      clab.opacity.expression = preamble(i) + 'clamp(p*3,0,1)*Math.min(o,1)*100';
     }
 
-    // --- count-up value labels: big, bold, tight to the bar tops -----------
-    for (var i3 = n - 1; i3 >= 0; i3--) {
-      var itV = cfg.items[i3];
-      var xV = geo.left + slot * (i3 + 0.5);
-      var hV = ph * (itV.value / niceMax);
-      var vlab = addTextItem(comp, ctrl, "Value " + pad2(i3 + 1) + " — \"" + itV.label + "\"",
-        formatStatic(itV.value, cfg.format, total), 72 * k, ParagraphJustification.CENTER_JUSTIFY, "bold", LC.value);
-      vlab.position.expression =
-        preamble(i3) + '[' + round3(xV) + ',' + round3(geo.base) + '-Math.max(' + round3(hV) + '*e,0)-' + round3(20 * k) + ']';
-      vlab.property("ADBE Text Properties").property("ADBE Text Document").expression =
-        preamble(i3) + countUpBody(itV.value, total, cfg.format) + 'out';
-      vlab.opacity.expression = preamble(i3) + 'clamp(p*4,0,1)*100';
+    // Count-up value labels at each bar tip.
+    if (showValues) {
+      for (j = m - 1; j >= 0; j--) {
+        for (i = n - 1; i >= 0; i--) {
+          v = data.series[j].values[i];
+          idx = round3(i + j * 0.25);
+          var L = (horiz ? pw : ph) * v / axis.range;
+          var A2 = round3(Math.abs(L));
+          var S2 = L < 0 ? -1 : 1;
+          var off2 = slot * (i + 0.5) - groupLen / 2 + thickSlot * (j + 0.5);
+          var vname = "Value " + pad2(i + 1) + (m > 1 ? "." + (j + 1) : "") + " — \"" + data.categories[i] + "\"" +
+            (m > 1 ? " · " + data.series[j].name : "");
+          var just = horiz
+            ? (S2 > 0 ? ParagraphJustification.LEFT_JUSTIFY : ParagraphJustification.RIGHT_JUSTIFY)
+            : ParagraphJustification.CENTER_JUSTIFY;
+          var vlab = addTextItem(comp, ctrl, vname, formatStatic(v, cfg.format, total), vSize, just, "bold", LC.value);
+          if (horiz) {
+            vlab.position.expression = preamble(idx) +
+              '[' + round3(zeroX) + '+' + S2 + '*(Math.max(' + A2 + '*e,0)+' + round3(14 * k) + '),' +
+              round3(geo.top + off2 + vSize * 0.35) + ']';
+          } else {
+            var tipOff = S2 > 0 ? -20 * k : (vSize * 0.9 + 8 * k);
+            vlab.position.expression = preamble(idx) +
+              '[' + round3(geo.left + off2) + ',' + round3(zeroY) + '+' + (-S2) + '*Math.max(' + A2 + '*e,0)+' + round3(tipOff) + ']';
+          }
+          vlab.property("ADBE Text Properties").property("ADBE Text Document").expression =
+            preamble(idx) + countUpBody(v, total, cfg.format) + 'out';
+          vlab.opacity.expression = preamble(idx) + 'clamp(p*4,0,1)*Math.min(o,1)*100';
+        }
+      }
     }
 
-    buildLegend(comp, ctrl, geo, cfg);
+    buildLegend(comp, ctrl, geo, data);
     buildTitle(comp, ctrl, cfg, 0, geo.top - 110 * k, k);
     return geo;
   }
 
-  // =========================================================== line chart
+  // ====================================================== line/area chart
 
-  function buildLine(comp, ctrl, cfg, k) {
-    var n = cfg.items.length;
+  /* Line chart; isArea=true renders the same geometry with a prominent
+   * filled area (the Area chart type). Supports multiple series — each
+   * series draws with its own tone, staggered by series index. */
+  function buildLine(comp, ctrl, cfg, k, isArea) {
+    var data = normalizeSeries(cfg);
+    var n = data.categories.length;
+    var m = data.series.length;
     var pw = 1440 * k, ph = 700 * k;
     var geo = { pw: pw, ph: ph, left: -pw / 2, right: pw / 2, base: ph / 2, top: -ph / 2, k: k };
 
-    var total = sum(cfg.items);
-    var step = niceStep(maxVal(cfg.items), 5);
-    var niceMax = Math.ceil(maxVal(cfg.items) / step) * step;
-    if (niceMax <= 0) niceMax = 1;
+    var axis = computeAxis(data.series);
+    var total = grandTotal(data.series);
+    buildValueAxis(comp, ctrl, geo, axis, cfg.format, total, false);
 
-    buildAxesAndTicks(comp, ctrl, geo, niceMax, step, cfg.format, total);
-
-    // Point positions (padded inside the plot box).
+    var showValues = !cfg.format || cfg.format.showValues !== false;
+    var zeroY = geo.base - ph * ((0 - axis.min) / axis.range);
     var pad = 50 * k;
     var usable = pw - pad * 2;
-    var pts = [];
-    var i;
-    for (i = 0; i < n; i++) {
-      var x = geo.left + pad + usable * (n > 1 ? i / (n - 1) : 0.5);
-      var y = geo.base - ph * (cfg.items[i].value / niceMax);
-      pts.push([x, y]);
+    var dotSize = (m > 1 ? 14 : 18) * k;
+    var vSize = (m > 1 ? 26 : 34) * k;
+    var areaOp = isArea ? (m > 1 ? 35 : 45) : (m > 1 ? 14 : 26);
+
+    // Per-series point positions and draw-on length fractions.
+    var i, j;
+    var seriesPts = [], seriesFracs = [], seriesWins = [];
+    for (j = 0; j < m; j++) {
+      var pts = [];
+      for (i = 0; i < n; i++) {
+        var x = geo.left + pad + usable * (n > 1 ? i / (n - 1) : 0.5);
+        var y = geo.base - ph * ((data.series[j].values[i] - axis.min) / axis.range);
+        pts.push([x, y]);
+      }
+      var lens = [0], totalLen = 0;
+      for (i = 1; i < n; i++) {
+        var dx = pts[i][0] - pts[i - 1][0];
+        var dy = pts[i][1] - pts[i - 1][1];
+        totalLen += Math.sqrt(dx * dx + dy * dy);
+        lens.push(totalLen);
+      }
+      var fracs = [], wins = [];
+      for (i = 0; i < n; i++) {
+        // Pop windows shrink near the path end so the last point always
+        // completes its pop at exactly draw-on = 1.
+        var f = totalLen > 0 ? Math.min(lens[i] / totalLen * 0.97, 0.97) : 0;
+        fracs.push(f);
+        wins.push(Math.max(0.001, Math.min(0.08, 1 - f)));
+      }
+      seriesPts.push(pts);
+      seriesFracs.push(fracs);
+      seriesWins.push(wins);
     }
 
-    // Cumulative path-length fraction of each point — labels/dots pop as the
-    // trim-paths draw-on passes them.
-    var lens = [0];
-    var totalLen = 0;
-    for (i = 1; i < n; i++) {
-      var dx = pts[i][0] - pts[i - 1][0];
-      var dy = pts[i][1] - pts[i - 1][1];
-      totalLen += Math.sqrt(dx * dx + dy * dy);
-      lens.push(totalLen);
-    }
-    var fracs = [];
-    for (i = 0; i < n; i++) {
-      var f = totalLen > 0 ? lens[i] / totalLen : 0;
-      fracs.push(Math.min(f * 0.97, 0.97)); // nudge earlier so the last dot fires
+    function popPre(j2, i2) {
+      return preamble(j2) +
+        'var pp=clamp((Math.min(e,1)-' + round6(seriesFracs[j2][i2]) + ')/' + round6(seriesWins[j2][i2]) + ',0,1);pp=pp*pp*(3-2*pp);\n';
     }
 
-    // --- soft area fill under the line (fades in as the line draws) --------
-    var apts = [];
-    for (i = 0; i < n; i++) apts.push(pts[i]);
-    apts.push([pts[n - 1][0], geo.base]);
-    apts.push([pts[0][0], geo.base]);
-    var area = addShapeItem(comp, ctrl, "Area Fill — \"" + cfg.seriesName + "\"", LC.area);
-    area.position.setValue([0, 0]);
-    var acont = addGroupWithPath(area, "Area", apts, true);
-    var afill = acont.addProperty("ADBE Vector Graphic - Fill");
-    afill.property("ADBE Vector Fill Color").expression = rampColorExpr(0, 1);
-    area.opacity.expression = preamble(0) + 'Math.min(e,1)*26';
-    // Soft alpha fade toward the baseline (gradient-fill opacity stops are
-    // not scriptable — a heavily feathered Linear Wipe does the same job).
-    try {
-      var wipe = fxParade(area).addProperty("ADBE Linear Wipe");
-      setFxValue(wipe, "ADBE Linear Wipe-0001", "Transition Completion", 35);
-      setFxValue(wipe, "ADBE Linear Wipe-0002", "Wipe Angle", 0);
-      setFxValue(wipe, "ADBE Linear Wipe-0003", "Feather", 700 * k);
-    } catch (eW) {}
+    function seriesTone(j2) { return m > 1 ? itemTone(j2, m) : 0; }
 
-    // --- the line -----------------------------------------------------------
-    var line = addShapeItem(comp, ctrl, "Chart Line — \"" + cfg.seriesName + "\"", LC.line);
-    line.position.setValue([0, 0]);
-    var cont = addGroupWithPath(line, "Line", pts, false);
-    var trim = cont.addProperty("ADBE Vector Filter - Trim");
-    trim.property("ADBE Vector Trim Start").setValue(0);
-    trim.property("ADBE Vector Trim End").expression = preamble(0) + 'Math.min(e,1)*100';
-    var st = cont.addProperty("ADBE Vector Graphic - Stroke");
-    st.property("ADBE Vector Stroke Width").expression =
-      'thisComp.layer("' + CTRL_NAME + '").effect("STYLE | Line Weight")(1)';
-    st.property("ADBE Vector Stroke Color").expression = rampColorExpr(0, 1);
-    try { st.property("ADBE Vector Stroke Line Cap").setValue(2); } catch (eCap) {} // round
-    var lineColors = { fill: { expr: rampColorExpr(0, 1) }, highlight: { expr: rampColorExpr(0, 1.5) } };
-    addGlowStack(line, k, lineColors, true);
-
-    // Pop timing: each point pops in over a short window after the draw-on
-    // passes it. The window shrinks near the end of the path so the LAST
-    // point still completes its pop at exactly progress = 1 (a fixed-width
-    // window left it stranded at ~22% opacity).
-    var wins = [];
-    for (i = 0; i < n; i++) wins.push(Math.max(0.001, Math.min(0.08, 1 - fracs[i])));
-    function popPre(idx) {
-      return preamble(0) +
-        'var pp=clamp((Math.min(e,1)-' + round6(fracs[idx]) + ')/' + round6(wins[idx]) + ',0,1);pp=pp*pp*(3-2*pp);\n';
+    // --- area fills (bottom block; the Area type just turns these up) ------
+    for (j = m - 1; j >= 0; j--) {
+      var pts2 = seriesPts[j];
+      var apts = [];
+      for (i = 0; i < n; i++) apts.push(pts2[i]);
+      apts.push([pts2[n - 1][0], zeroY]);
+      apts.push([pts2[0][0], zeroY]);
+      var area = addShapeItem(comp, ctrl, "Area Fill — \"" + data.series[j].name + "\"", LC.area);
+      area.position.setValue([0, 0]);
+      var acont = addGroupWithPath(area, "Area", apts, true);
+      var afill = acont.addProperty("ADBE Vector Graphic - Fill");
+      afill.property("ADBE Vector Fill Color").expression = rampColorExpr(seriesTone(j), 1);
+      area.opacity.expression = preamble(j) + 'Math.min(e,1)*' + areaOp;
+      // Alpha fade toward the zero line (gradient opacity stops are not
+      // scriptable — a heavily feathered Linear Wipe does the same job).
+      try {
+        var wipe = fxParade(area).addProperty("ADBE Linear Wipe");
+        setFxValue(wipe, "ADBE Linear Wipe-0001", "Transition Completion", isArea ? 25 : 35);
+        setFxValue(wipe, "ADBE Linear Wipe-0002", "Wipe Angle", 0);
+        setFxValue(wipe, "ADBE Linear Wipe-0003", "Feather", 700 * k);
+      } catch (eW) {}
     }
 
-    // Layers are created bottom-up in organized blocks: dots, then category
-    // labels, then value labels. Reverse order keeps 01 on top per block.
+    // --- the lines ----------------------------------------------------------
+    for (j = m - 1; j >= 0; j--) {
+      var line = addShapeItem(comp, ctrl, "Chart Line — \"" + data.series[j].name + "\"", LC.line);
+      line.position.setValue([0, 0]);
+      var cont = addGroupWithPath(line, "Line", seriesPts[j], false);
+      var trim = cont.addProperty("ADBE Vector Filter - Trim");
+      trim.property("ADBE Vector Trim Start").setValue(0);
+      trim.property("ADBE Vector Trim End").expression = preamble(j) + 'Math.min(e,1)*100';
+      var st = cont.addProperty("ADBE Vector Graphic - Stroke");
+      st.property("ADBE Vector Stroke Width").expression =
+        'thisComp.layer("' + CTRL_NAME + '").effect("STYLE | Line Weight")(1)';
+      st.property("ADBE Vector Stroke Color").expression = rampColorExpr(seriesTone(j), 1);
+      try { st.property("ADBE Vector Stroke Line Cap").setValue(2); } catch (eCap) {} // round
+      var lineColors = { fill: { expr: rampColorExpr(seriesTone(j), 1) }, highlight: { expr: rampColorExpr(seriesTone(j), 1.5) } };
+      addGlowStack(line, k, lineColors, true);
+    }
+
+    // --- dots: glossy core with a tone ring, popping as the line arrives ----
+    for (j = m - 1; j >= 0; j--) {
+      for (i = n - 1; i >= 0; i--) {
+        var colors = m > 1
+          ? { fill: { expr: rampColorExpr(seriesTone(j), 1) },
+              outline: { expr: rampColorExpr(seriesTone(j), 0.55) },
+              highlight: { expr: rampColorExpr(seriesTone(j), 1.5) } }
+          : seriesColorSpec(data, i, 0);
+        var dname = "Point " + pad2(i + 1) + (m > 1 ? "." + (j + 1) : "") + " — \"" + data.categories[i] + "\"" +
+          (m > 1 ? " · " + data.series[j].name : "");
+        var dot = addShapeItem(comp, ctrl, dname, LC.dot);
+        dot.position.setValue(seriesPts[j][i]);
+        var dgrp = dot.property("ADBE Root Vectors Group").addProperty("ADBE Vector Group");
+        dgrp.name = "Dot";
+        var dcont = dgrp.property("ADBE Vectors Group");
+        var ell = dcont.addProperty("ADBE Vector Shape - Ellipse");
+        ell.property("ADBE Vector Ellipse Size").setValue([dotSize, dotSize]);
+        var dfill = dcont.addProperty("ADBE Vector Graphic - Fill");
+        applyColor(dfill.property("ADBE Vector Fill Color"), colors.highlight);
+        var dst = dcont.addProperty("ADBE Vector Graphic - Stroke");
+        dst.property("ADBE Vector Stroke Width").expression = outlineWidthExpr();
+        applyColor(dst.property("ADBE Vector Stroke Color"), colors.fill);
+        dot.scale.expression = popPre(j, i) +
+          'var s=1.70158,u=pp-1;var eb=1+(s+1)*u*u*u+s*u*u;\n[100*eb,100*eb]';
+        addGlowStack(dot, k, colors, false); // core tier only — many dots
+      }
+    }
+
+    // --- category labels ------------------------------------------------------
     for (i = n - 1; i >= 0; i--) {
-      var it = cfg.items[i];
-      var colors = itemFillColorSpec(cfg, i, n);
-
-      var dot = addShapeItem(comp, ctrl, "Point " + pad2(i + 1) + " — \"" + it.label + "\"", LC.dot);
-      dot.position.setValue(pts[i]);
-      var dgrp = dot.property("ADBE Root Vectors Group").addProperty("ADBE Vector Group");
-      dgrp.name = "Dot";
-      var dcont = dgrp.property("ADBE Vectors Group");
-      var ell = dcont.addProperty("ADBE Vector Shape - Ellipse");
-      ell.property("ADBE Vector Ellipse Size").setValue([18 * k, 18 * k]);
-      // Glossy dot: bright core with a base-tone ring, like the reference.
-      var dfill = dcont.addProperty("ADBE Vector Graphic - Fill");
-      applyColor(dfill.property("ADBE Vector Fill Color"), colors.highlight);
-      var dst = dcont.addProperty("ADBE Vector Graphic - Stroke");
-      dst.property("ADBE Vector Stroke Width").expression = outlineWidthExpr();
-      applyColor(dst.property("ADBE Vector Stroke Color"), colors.fill);
-      // pop with a little overshoot as the line arrives
-      dot.scale.expression = popPre(i) +
-        'var s=1.70158,u=pp-1;var eb=1+(s+1)*u*u*u+s*u*u;\n[100*eb,100*eb]';
-      addGlowStack(dot, k, colors, false); // core tier only — 3 glows × 60 dots would crawl
+      var clab = addTextItem(comp, ctrl, "Category " + pad2(i + 1) + " — \"" + data.categories[i] + "\"",
+        data.categories[i], 27 * k, ParagraphJustification.CENTER_JUSTIFY, "medium", LC.category);
+      clab.position.setValue([seriesPts[0][i][0], geo.base + 44 * k]);
+      clab.opacity.expression = popPre(0, i) + 'pp*100';
     }
 
-    for (i = n - 1; i >= 0; i--) {
-      var itC = cfg.items[i];
-      var clab = addTextItem(comp, ctrl, "Category " + pad2(i + 1) + " — \"" + itC.label + "\"",
-        itC.label, 27 * k, ParagraphJustification.CENTER_JUSTIFY, "medium", LC.category);
-      clab.position.setValue([pts[i][0], geo.base + 44 * k]);
-      clab.opacity.expression = popPre(i) + 'pp*100';
+    // --- value labels -----------------------------------------------------------
+    if (showValues) {
+      for (j = m - 1; j >= 0; j--) {
+        for (i = n - 1; i >= 0; i--) {
+          var v = data.series[j].values[i];
+          var vname = "Value " + pad2(i + 1) + (m > 1 ? "." + (j + 1) : "") + " — \"" + data.categories[i] + "\"" +
+            (m > 1 ? " · " + data.series[j].name : "");
+          var vlab = addTextItem(comp, ctrl, vname,
+            formatStatic(v, cfg.format, total), vSize, ParagraphJustification.CENTER_JUSTIFY, "bold", LC.value);
+          vlab.position.setValue([seriesPts[j][i][0], seriesPts[j][i][1] - (dotSize + 18 * k)]);
+          vlab.property("ADBE Text Properties").property("ADBE Text Document").expression =
+            popPre(j, i) + countUpBody(v, total, cfg.format, "pp") + 'out';
+          vlab.opacity.expression = popPre(j, i) + 'pp*100';
+        }
+      }
     }
 
-    for (i = n - 1; i >= 0; i--) {
-      var itV = cfg.items[i];
-      var vlab = addTextItem(comp, ctrl, "Value " + pad2(i + 1) + " — \"" + itV.label + "\"",
-        formatStatic(itV.value, cfg.format, total), 34 * k, ParagraphJustification.CENTER_JUSTIFY, "bold", LC.value);
-      vlab.position.setValue([pts[i][0], pts[i][1] - 36 * k]);
-      vlab.property("ADBE Text Properties").property("ADBE Text Document").expression =
-        popPre(i) + countUpBody(itV.value, total, cfg.format, "pp") + 'out';
-      vlab.opacity.expression = popPre(i) + 'pp*100';
-    }
-
-    buildLegend(comp, ctrl, geo, cfg);
+    buildLegend(comp, ctrl, geo, data);
     buildTitle(comp, ctrl, cfg, 0, geo.top - 110 * k, k);
     return geo;
   }
 
   // ============================================================ pie chart
+
+  /* Donut-aware slice geometry: the ring's midline diameter and stroke width
+   * follow STYLE | Donut Hole % live (0 = solid pie, up to 92 = thin ring). */
+  function donutSizeExpr(R) {
+    return 'var C=thisComp.layer("' + CTRL_NAME + '");\n' +
+      'var hh=clamp(C.effect("STYLE | Donut Hole %")(1)/100,0,0.92);\n' +
+      'var d=' + round3(R) + '*(1+hh);\n[d,d]';
+  }
+
+  function donutWidthExpr(R) {
+    return 'var C=thisComp.layer("' + CTRL_NAME + '");\n' +
+      'var hh=clamp(C.effect("STYLE | Donut Hole %")(1)/100,0,0.92);\n' +
+      round3(R) + '*(1-hh)';
+  }
 
   /* Slices use the classic trim-path trick: a circle path of radius R/2 with
    * a stroke R wide fills the full disc; Trim Start/End carve the wedge.
@@ -935,7 +1123,7 @@
       grp.name = "Slice";
       var cont = grp.property("ADBE Vectors Group");
       var ell = cont.addProperty("ADBE Vector Shape - Ellipse");
-      ell.property("ADBE Vector Ellipse Size").setValue([R, R]); // path radius R/2
+      ell.property("ADBE Vector Ellipse Size").expression = donutSizeExpr(R); // donut-aware
       var trim = cont.addProperty("ADBE Vector Filter - Trim");
       trim.property("ADBE Vector Trim Start").setValue(c0 * 100);
       trim.property("ADBE Vector Trim End").expression = trimEndExpr;
@@ -952,7 +1140,7 @@
         st = cont.addProperty("ADBE Vector Graphic - Stroke");
         applyColor(st.property("ADBE Vector Stroke Color"), colors.fill);
       }
-      st.property("ADBE Vector Stroke Width").setValue(R);
+      st.property("ADBE Vector Stroke Width").expression = donutWidthExpr(R); // donut-aware
       try { st.property("ADBE Vector Stroke Line Cap").setValue(1); } catch (eCap) {} // butt = radial edges
 
       // Hidden until the sweep reaches this slice — nothing pre-renders.
@@ -1083,7 +1271,8 @@
       var ctrl = res.ctrl;
 
       if (cfg.type === "bar") buildBar(comp, ctrl, cfg, k);
-      else if (cfg.type === "line") buildLine(comp, ctrl, cfg, k);
+      else if (cfg.type === "line") buildLine(comp, ctrl, cfg, k, false);
+      else if (cfg.type === "area") buildLine(comp, ctrl, cfg, k, true);
       else if (cfg.type === "pie") buildPie(comp, ctrl, cfg, k);
       else return "ERR|Unknown chart type: " + cfg.type;
 
@@ -1091,9 +1280,11 @@
       // controller already existed). Refreshed on every Update.
       var anim = readAnimValues(ctrl, cfg);
       var startT = anim.delay;
+      var nPts = cfg.categories ? cfg.categories.length : cfg.items.length;
+      var mSer = cfg.series ? cfg.series.length : 1;
       var endT;
-      if (cfg.type === "bar") endT = anim.delay + anim.duration + anim.stagger * (cfg.items.length - 1);
-      else if (cfg.type === "line") endT = anim.delay + anim.duration + 0.3; // label tail
+      if (cfg.type === "bar") endT = anim.delay + anim.duration + anim.stagger * ((nPts - 1) + (mSer - 1) * 0.25);
+      else if (cfg.type === "line" || cfg.type === "area") endT = anim.delay + anim.duration + anim.stagger * (mSer - 1) + 0.3;
       else endT = anim.delay + anim.duration + 0.6; // pie: single sweep + label tail
       setMarkers(ctrl, startT, endT);
 
@@ -1129,6 +1320,109 @@
     }
   }
 
+  // ================================================================= bake
+
+  /* Convert the live expression rig to plain keyframes for fast playback and
+   * rendering. Properties whose expressions don't reference time (colors,
+   * widths, glow gains) freeze to their current value; time-driven ones are
+   * sampled per frame across the build window (and the animate-out window)
+   * and keyframed. Update rebuilds the live rig at any time. */
+  function bakeProp(prop, layer, buildLen, outEn, outDur, step, stats) {
+    var ex = "";
+    try { ex = prop.expression; } catch (e) { return; }
+    if (!ex || !prop.expressionEnabled) return;
+    stats.props++;
+
+    var refsTime = /(^|[^A-Za-z])(time|inPoint|outPoint)([^A-Za-z]|$)/.test(ex);
+    if (!refsTime) {
+      var v0 = prop.valueAtTime(layer.inPoint, false);
+      prop.expression = "";
+      try { prop.setValue(v0); } catch (eSet) {}
+      return;
+    }
+
+    var t0 = layer.inPoint;
+    var tEnd = Math.min(layer.outPoint, t0 + buildLen);
+    var times = [];
+    var t;
+    for (t = t0; t <= tEnd + step / 2; t += step) times.push(Math.min(t, layer.outPoint));
+    if (outEn) {
+      var o0 = Math.max(layer.outPoint - outDur - 0.2, tEnd + step);
+      for (t = o0; t <= layer.outPoint + step / 2; t += step) times.push(Math.min(t, layer.outPoint));
+    }
+    var vals = [];
+    var i;
+    for (i = 0; i < times.length; i++) vals.push(prop.valueAtTime(times[i], false));
+    prop.expression = "";
+    try {
+      for (i = 0; i < times.length; i++) prop.setValueAtTime(times[i], vals[i]);
+      stats.keys += times.length;
+    } catch (eK) {}
+  }
+
+  function bakeGroup(group, layer, buildLen, outEn, outDur, step, stats) {
+    for (var i = 1; i <= group.numProperties; i++) {
+      var p = group.property(i);
+      if (!p) continue;
+      if (p.propertyType === PropertyType.PROPERTY) {
+        bakeProp(p, layer, buildLen, outEn, outDur, step, stats);
+      } else {
+        bakeGroup(p, layer, buildLen, outEn, outDur, step, stats);
+      }
+    }
+  }
+
+  function bake() {
+    var undoOpen = false;
+    try {
+      var comp = app.project.activeItem;
+      if (!(comp && comp instanceof CompItem)) return "ERR|Open the comp that contains the chart first.";
+      var ctrl = findController(comp);
+      if (!ctrl) return "ERR|No Graphinator chart found in this comp.";
+
+      app.beginUndoGroup("Graphinator: Bake to Keyframes");
+      undoOpen = true;
+
+      var fx = ctrl.property("ADBE Effect Parade");
+      function fxVal(name, dflt) {
+        try { return fx.property(name).property(1).value; } catch (e) { return dflt; }
+      }
+      var dly = fxVal("ANIM | Start Delay", 0.3);
+      var dur = fxVal("ANIM | Build Duration", 2);
+      var stag = fxVal("ANIM | Stagger", 0.25);
+      var outEn = fxVal("ANIM | Out Enabled", 0) > 0;
+      var outDur = fxVal("ANIM | Out Duration", 1);
+
+      // Sample window covers the longest possible staggered build.
+      var nGuess = 60;
+      try {
+        var c = String(ctrl.comment);
+        var ix = c.indexOf(DATA_TAG);
+        if (ix >= 0) {
+          var stored = parseJSON(c.substring(ix + DATA_TAG.length));
+          if (stored && stored.categories) nGuess = stored.categories.length;
+          else if (stored && stored.items) nGuess = stored.items.length;
+        }
+      } catch (eN) {}
+      var buildLen = dly + dur + stag * (nGuess + 1) + 1.0;
+      var step = comp.frameDuration;
+      var stats = { props: 0, keys: 0 };
+
+      for (var i = comp.numLayers; i >= 1; i--) {
+        var lay = comp.layer(i);
+        if (String(lay.comment).indexOf(ITEM_TAG) !== 0) continue;
+        bakeGroup(lay, lay, buildLen, outEn, outDur, step, stats);
+      }
+
+      app.endUndoGroup();
+      undoOpen = false;
+      return "OK|Baked " + stats.props + " expressions (" + stats.keys + " keyframes). The chart no longer follows the controller — press Update any time to rebuild the live rig.";
+    } catch (err) {
+      if (undoOpen) { try { app.endUndoGroup(); } catch (e2) {} }
+      return "ERR|" + (err && err.message ? err.message : String(err));
+    }
+  }
+
   function setMasterColor(r, g, b) {
     try {
       var comp = app.project.activeItem;
@@ -1149,7 +1443,8 @@
   global.GRAPHINATOR = {
     generate: generate,
     readData: readData,
-    setMasterColor: setMasterColor
+    setMasterColor: setMasterColor,
+    bake: bake
   };
 
 })($.global);

@@ -25,8 +25,21 @@
     <div class="type-switch" id="typeSwitch">
       <button data-type="bar" class="active">Bar</button>
       <button data-type="line">Line</button>
+      <button data-type="area">Area</button>
       <button data-type="pie">Pie</button>
     </div>
+    <div class="field-row" id="barDirRow" style="margin-top:8px;">
+      <label for="barDir">Bar direction</label>
+      <select id="barDir">
+        <option value="vertical">Vertical</option>
+        <option value="horizontal">Horizontal</option>
+      </select>
+    </div>
+  </section>
+
+  <section>
+    <h2>Preview <span class="hint">(approximate, final frame)</span></h2>
+    <canvas id="preview" height="150"></canvas>
   </section>
 
   <section>
@@ -35,35 +48,33 @@
       <label for="chartTitle">Title</label>
       <input type="text" id="chartTitle" placeholder="(optional)">
     </div>
-    <div class="field-row">
-      <label for="seriesName">Series name</label>
-      <input type="text" id="seriesName" value="Series 1">
-    </div>
   </section>
 
   <section>
     <h2>Data <span class="hint">(2&ndash;60 points)</span></h2>
     <div class="data-tabs" id="dataTabs">
-      <button data-ds="barline" class="active">Bar &amp; Line</button>
+      <button data-ds="barline" class="active">Bar / Line / Area</button>
       <button data-ds="pie">Pie</button>
     </div>
-    <div class="data-head">
-      <span class="col-label">Label</span>
-      <span class="col-value">Value</span>
-      <span class="col-custom" title="Override the auto tone with a custom color">Custom</span>
-      <span class="col-del"></span>
-    </div>
-    <div id="dataRows"></div>
+    <div id="dataGrid"></div>
     <div class="data-actions">
-      <button id="addRow" class="small">+ Add row</button>
-      <button id="togglePaste" class="small">Paste data&hellip;</button>
-      <button id="copyDs" class="small" title="Replace this tab's rows with the other tab's data">⇄ Copy from other tab</button>
+      <button id="addRow" class="small">+ Row</button>
+      <button id="addSeries" class="small">+ Series</button>
+      <button id="delSeries" class="small">&minus; Series</button>
+      <button id="togglePaste" class="small">Paste&hellip;</button>
+      <button id="importCsv" class="small">Import CSV&hellip;</button>
+      <button id="copyDs" class="small" title="Replace this tab's rows with the other tab's data">&#8646; Copy</button>
+      <input type="file" id="csvFile" accept=".csv,.tsv,.txt" class="hidden">
     </div>
     <div id="pasteBox" class="hidden">
       <textarea id="pasteArea" rows="5"
-        placeholder="One point per line: Label [tab or comma] Value&#10;Q1	1200&#10;Q2	1875"></textarea>
+        placeholder="One point per line: Label [tab or comma] Value [more values for extra series]&#10;Q1	1200	900&#10;Q2	1875	1100"></textarea>
       <button id="importPaste" class="small">Import (replaces rows)</button>
     </div>
+    <p class="note">Bar, line &amp; area share the first tab (up to 5 series);
+       pie keeps its own values. The tab follows the chart type. Per-point custom
+       colors apply in single-series mode; with multiple series each series gets
+       its own tone.</p>
   </section>
 
   <section>
@@ -105,10 +116,18 @@
         <input type="text" id="fmtSuffix" class="short" placeholder="k">
       </div>
     </div>
+    <label class="inline-check block" style="margin-top:6px;">
+      <input type="checkbox" id="fmtShowValues" checked> Show value labels on bars/points
+    </label>
   </section>
 
   <section id="pieOpts" class="hidden">
     <h2>Pie Options</h2>
+    <div class="field-row">
+      <label for="pieDonut">Donut hole</label>
+      <input type="number" id="pieDonut" min="0" max="90" value="0"><span class="unit">%</span>
+      <span class="hint">(live on controller after generating)</span>
+    </div>
     <label class="inline-check block"><input type="checkbox" id="pieSort">
       Sort slices largest-first from 12 o&rsquo;clock</label>
     <label class="inline-check block"><input type="checkbox" id="pieIncludeValue">
@@ -136,14 +155,39 @@
         <option value="bounce">Bounce</option>
       </select>
     </div>
-    <p class="note">These seed the chart on first generate. Afterwards they are live
-       on the controller layer&rsquo;s <code>ANIM</code> effects &mdash; Update will
-       <em>not</em> overwrite your tweaks there.</p>
+    <div class="field-row">
+      <label class="inline-check"><input type="checkbox" id="animOut"> Animate out</label>
+      <label for="animOutDur" class="mid-label">Out duration</label>
+      <input type="number" id="animOutDur" min="0.1" step="0.1" value="1"><span class="unit">s</span>
+    </div>
+    <p class="note">These seed the chart on first generate; afterwards they are live
+       on the controller&rsquo;s <code>ANIM</code> effects &mdash; Update will
+       <em>not</em> overwrite tweaks there. Animate-out reverses the build so the
+       chart finishes leaving exactly at its layers&rsquo; out point — trim the
+       layers to set the exit time.</p>
+  </section>
+
+  <section>
+    <h2>Style Presets</h2>
+    <div class="field-row">
+      <select id="presetList"><option value="">(choose preset)</option></select>
+      <button id="applyPreset" class="small">Apply</button>
+      <button id="deletePreset" class="small">Delete</button>
+    </div>
+    <div class="field-row">
+      <input type="text" id="presetName" placeholder="Preset name&hellip;">
+      <button id="savePreset" class="small">Save current</button>
+    </div>
+    <p class="note">Presets capture color, format, pie and animation settings
+       (not data). Stored with the panel.</p>
   </section>
 
   <div class="footer-actions">
     <button id="generate" class="primary">Generate / Update Chart</button>
     <button id="loadFromComp">Load From Comp</button>
+  </div>
+  <div class="footer-actions">
+    <button id="bake" class="wide-secondary" title="Convert the live expression rig to plain keyframes for fast playback/rendering. Update rebuilds the live rig.">Bake to Keyframes</button>
   </div>
 
   <div id="status"></div>
