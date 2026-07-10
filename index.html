@@ -43,6 +43,10 @@
 
   <section>
     <h2>Data <span class="hint">(2&ndash;60 points)</span></h2>
+    <div class="data-tabs" id="dataTabs">
+      <button data-ds="barline" class="active">Bar &amp; Line</button>
+      <button data-ds="pie">Pie</button>
+    </div>
     <div class="data-head">
       <span class="col-label">Label</span>
       <span class="col-value">Value</span>
@@ -53,6 +57,7 @@
     <div class="data-actions">
       <button id="addRow" class="small">+ Add row</button>
       <button id="togglePaste" class="small">Paste data&hellip;</button>
+      <button id="copyDs" class="small" title="Replace this tab's rows with the other tab's data">⇄ Copy from other tab</button>
     </div>
     <div id="pasteBox" class="hidden">
       <textarea id="pasteArea" rows="5"

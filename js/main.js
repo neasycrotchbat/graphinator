@@ -15,15 +15,30 @@
 
   // ---------------------------------------------------------------- state
 
+  // Two independent datasets: bar & line share a series; pie keeps its own
+  // parts-of-a-whole values. The active tab edits one of them; generation
+  // sends whichever matches the chart type. Both persist in the comp.
   var state = {
     type: 'bar',
-    items: [
-      { label: 'Q1', value: 1200, useCustom: false, color: '#4e8cff' },
-      { label: 'Q2', value: 1875, useCustom: false, color: '#4e8cff' },
-      { label: 'Q3', value: 1520, useCustom: false, color: '#4e8cff' },
-      { label: 'Q4', value: 2340, useCustom: false, color: '#4e8cff' }
-    ]
+    activeDs: 'barline',
+    datasets: {
+      barline: [
+        { label: 'Q1', value: 1200, useCustom: false, color: '#4e8cff' },
+        { label: 'Q2', value: 1875, useCustom: false, color: '#4e8cff' },
+        { label: 'Q3', value: 1520, useCustom: false, color: '#4e8cff' },
+        { label: 'Q4', value: 2340, useCustom: false, color: '#4e8cff' }
+      ],
+      pie: [
+        { label: 'Rent', value: 1200, useCustom: false, color: '#4e8cff' },
+        { label: 'Food', value: 800, useCustom: false, color: '#4e8cff' },
+        { label: 'Utilities', value: 350, useCustom: false, color: '#4e8cff' },
+        { label: 'Savings', value: 650, useCustom: false, color: '#4e8cff' }
+      ]
+    }
   };
+
+  function activeItems() { return state.datasets[state.activeDs]; }
+  function dsForType(type) { return type === 'pie' ? 'pie' : 'barline'; }
 
   // ------------------------------------------------------------- helpers
 
@@ -89,7 +104,7 @@
   function renderRows() {
     var wrap = $('dataRows');
     wrap.innerHTML = '';
-    state.items.forEach(function (item, i) {
+    activeItems().forEach(function (item, i) {
       var row = document.createElement('div');
       row.className = 'data-row';
 
@@ -127,7 +142,7 @@
       del.textContent = '✕';
       del.title = 'Remove row';
       del.addEventListener('click', function () {
-        state.items.splice(i, 1);
+        activeItems().splice(i, 1);
         renderRows();
         renderRamp();
       });
@@ -144,7 +159,7 @@
   function renderRamp() {
     var wrap = $('rampPreview');
     wrap.innerHTML = '';
-    var n = Math.max(state.items.length, 2);
+    var n = Math.max(activeItems().length, 2);
     var master = $('masterColor').value;
     var spread = parseFloat($('toneSpread').value) / 100;
     for (var i = 0; i < n; i++) {
@@ -158,19 +173,23 @@
   // -------------------------------------------------------- build config
 
   function collectConfig() {
+    var type = state.type;
+    var dsName = dsForType(type);
+    var tabLabel = dsName === 'pie' ? 'Pie' : 'Bar & Line';
+    var source = state.datasets[dsName];
+
     var items = [];
-    for (var i = 0; i < state.items.length; i++) {
-      var it = state.items[i];
+    for (var i = 0; i < source.length; i++) {
+      var it = source[i];
       var v = parseFloat(String(it.value).replace(/,/g, ''));
       if (!it.label || isNaN(v)) {
-        throw new Error('Row ' + (i + 1) + ': needs a label and a numeric value.');
+        throw new Error(tabLabel + ' tab, row ' + (i + 1) + ': needs a label and a numeric value.');
       }
       items.push({ label: it.label, value: v, useCustom: !!it.useCustom, color: it.color });
     }
-    if (items.length < 2) throw new Error('Enter at least 2 data points.');
+    if (items.length < 2) throw new Error(tabLabel + ' tab: enter at least 2 data points.');
     if (items.length > MAX_POINTS) throw new Error('Maximum ' + MAX_POINTS + ' data points.');
 
-    var type = state.type;
     if (type === 'pie') {
       for (var j = 0; j < items.length; j++) {
         if (items[j].value <= 0) throw new Error('Pie charts need every value > 0 (row ' + (j + 1) + ').');
@@ -187,6 +206,7 @@
       title: $('chartTitle').value,
       seriesName: $('seriesName').value || 'Series 1',
       items: items,
+      datasets: state.datasets, // both tabs persist with the chart
       color: {
         master: $('masterColor').value,
         spread: parseFloat($('toneSpread').value)
@@ -213,12 +233,23 @@
 
   function applyConfig(cfg) {
     state.type = cfg.type || 'bar';
-    state.items = (cfg.items || []).map(function (it) {
-      return {
-        label: it.label, value: it.value,
-        useCustom: !!it.useCustom, color: it.color || '#4e8cff'
-      };
-    });
+    state.activeDs = dsForType(state.type);
+    function cleanItems(arr) {
+      return (arr || []).map(function (it) {
+        return {
+          label: it.label, value: it.value,
+          useCustom: !!it.useCustom, color: it.color || '#4e8cff'
+        };
+      });
+    }
+    if (cfg.datasets) {
+      if (cfg.datasets.barline && cfg.datasets.barline.length) state.datasets.barline = cleanItems(cfg.datasets.barline);
+      if (cfg.datasets.pie && cfg.datasets.pie.length) state.datasets.pie = cleanItems(cfg.datasets.pie);
+    } else {
+      // Chart stored before per-type datasets existed — its items belong to
+      // whichever tab matches its type.
+      state.datasets[state.activeDs] = cleanItems(cfg.items);
+    }
     $('chartTitle').value = cfg.title || '';
     $('seriesName').value = cfg.seriesName || 'Series 1';
     if (cfg.color) {
@@ -255,6 +286,10 @@
       btns[i].className = btns[i].getAttribute('data-type') === state.type ? 'active' : '';
     }
     $('pieOpts').className = state.type === 'pie' ? '' : 'hidden';
+    var tabs = $('dataTabs').querySelectorAll('button');
+    for (var j = 0; j < tabs.length; j++) {
+      tabs[j].className = tabs[j].getAttribute('data-ds') === state.activeDs ? 'active' : '';
+    }
   }
 
   function generate() {
@@ -333,9 +368,10 @@
     }
     if (items.length < 2) { setStatus('Paste at least 2 lines of data.', true); return; }
     if (items.length > MAX_POINTS) { setStatus('Maximum ' + MAX_POINTS + ' data points.', true); return; }
-    state.items = items;
+    state.datasets[state.activeDs] = items;
     renderRows();
-    setStatus('Imported ' + items.length + ' data points.', false);
+    setStatus('Imported ' + items.length + ' data points into the ' +
+      (state.activeDs === 'pie' ? 'Pie' : 'Bar & Line') + ' tab.', false);
   }
 
   // ---------------------------------------------------------------- wire
@@ -344,12 +380,33 @@
     var t = ev.target.getAttribute && ev.target.getAttribute('data-type');
     if (!t) return;
     state.type = t;
+    state.activeDs = dsForType(t); // data tab follows the chart type
     syncTypeUI();
+    renderRows();
+  });
+
+  $('dataTabs').addEventListener('click', function (ev) {
+    var ds = ev.target.getAttribute && ev.target.getAttribute('data-ds');
+    if (!ds || ds === state.activeDs) return;
+    state.activeDs = ds;
+    syncTypeUI();
+    renderRows();
+  });
+
+  $('copyDs').addEventListener('click', function () {
+    var other = state.activeDs === 'pie' ? 'barline' : 'pie';
+    state.datasets[state.activeDs] = state.datasets[other].map(function (it) {
+      return { label: it.label, value: it.value, useCustom: it.useCustom, color: it.color };
+    });
+    renderRows();
+    setStatus('Copied ' + state.datasets[state.activeDs].length + ' rows from the ' +
+      (other === 'pie' ? 'Pie' : 'Bar & Line') + ' tab.', false);
   });
 
   $('addRow').addEventListener('click', function () {
-    if (state.items.length >= MAX_POINTS) { setStatus('Maximum ' + MAX_POINTS + ' data points.', true); return; }
-    state.items.push({ label: 'Item ' + (state.items.length + 1), value: 0, useCustom: false, color: '#4e8cff' });
+    var items = activeItems();
+    if (items.length >= MAX_POINTS) { setStatus('Maximum ' + MAX_POINTS + ' data points.', true); return; }
+    items.push({ label: 'Item ' + (items.length + 1), value: 0, useCustom: false, color: '#4e8cff' });
     renderRows();
   });
 

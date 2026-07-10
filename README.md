@@ -52,7 +52,11 @@ Rules of the road:
    1920×1080 with the chart filling ~75% of frame, wider than tall for
    bar/line; other comp sizes scale proportionally.
 2. Pick a chart type, enter data (or **Paste data…** rows of
-   `Label<TAB>Value` straight from a spreadsheet).
+   `Label<TAB>Value` straight from a spreadsheet). The Data section has two
+   tabs — **Bar & Line** share one dataset, **Pie** keeps its own
+   parts-of-a-whole values. The active tab follows the chart type (switch
+   tabs freely to edit either), **⇄ Copy from other tab** seeds one from the
+   other, and both datasets persist with the chart for later editing.
 3. Pick a master color or hit **🎲 Random** — data points are distinguished by
    ramped tones of the one color; tick **Custom** on a row to override just
    that item. Random also updates an already-generated chart live.
