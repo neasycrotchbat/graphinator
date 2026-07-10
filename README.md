@@ -35,7 +35,7 @@ Built for AE 2025 (25.x) on Windows; the manifest accepts AE 2019 (16.0) and up.
 | Master color, tone spread, label color | **`>> GRAPH CONTROLLER <<` layer** → Effect Controls (`COLOR |` / `STYLE |` groups) — live, no regeneration |
 | Build timing: delay, duration, stagger, easing | Controller layer → `ANIM |` effects — live |
 | Animate-out on/off + duration | Controller layer → `ANIM | Out Enabled` / `Out Duration` — live; the chart reverses out so it finishes leaving at its layers' out point (trim the layers to set the exit time) |
-| Donut hole size | Controller layer → `STYLE | Donut Hole %` — live, 0 = solid pie |
+| Donut hole size | Panel field, applied to `STYLE | Donut Hole %` on every pie Generate; stays live on the controller for tweaks between updates (0 = solid pie) |
 | Overall chart size | Controller layer → `SCALE | Overall Scale` — live |
 | Outline width, line weight, glow | Controller layer → `STYLE |` effects — live. `Glow Enabled` checkbox switches the whole glow stack off; `Glow Intensity` scales it |
 

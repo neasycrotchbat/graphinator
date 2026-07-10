@@ -239,6 +239,26 @@
     return null;
   }
 
+  /* AE reveals (twirls open) properties that scripts add expressions to,
+   * and offers no API to close them — but a DUPLICATE of a layer is born
+   * fully collapsed. Swap every generated layer for its duplicate so the
+   * timeline reads clean after a build. Duplicates keep properties,
+   * expressions, effects, and their parent (the controller), and slot into
+   * the original's stacking position. */
+  function collapseItems(comp) {
+    for (var i = comp.numLayers; i >= 1; i--) {
+      var lay = comp.layer(i);
+      if (String(lay.comment).indexOf(ITEM_TAG) !== 0) continue;
+      try {
+        var nm = lay.name;
+        var d = lay.duplicate(); // inserted directly above the original
+        lay.remove();            // duplicate now sits at the original index
+        d.name = nm;             // undo any " 2" suffix AE may have added
+        d.selected = false;
+      } catch (eDup) {}
+    }
+  }
+
   function removeItems(comp) {
     for (var i = comp.numLayers; i >= 1; i--) {
       var lay = comp.layer(i);
@@ -1273,6 +1293,16 @@
       var res = ensureController(comp, cfg);
       var ctrl = res.ctrl;
 
+      // The donut hole is authored in the panel — generating a pie always
+      // applies the panel's value to the controller (it stays live there
+      // for tweaking between Updates).
+      if (cfg.type === "pie") {
+        try {
+          ctrl.property("ADBE Effect Parade").property("STYLE | Donut Hole %")
+            .property(1).setValue((cfg.pie && cfg.pie.donutHole) || 0);
+        } catch (eDonut) {}
+      }
+
       if (cfg.type === "bar") buildBar(comp, ctrl, cfg, k);
       else if (cfg.type === "line") buildLine(comp, ctrl, cfg, k, false);
       else if (cfg.type === "area") buildLine(comp, ctrl, cfg, k, true);
@@ -1294,7 +1324,10 @@
       storeData(ctrl, jsonStr);
       ctrl.moveToBeginning();
 
-      // Leave the timeline tidy: nothing selected, all layers collapsed.
+      // Leave the timeline tidy: swap each generated layer for a collapsed
+      // duplicate (expression reveals can't be closed any other way), then
+      // deselect everything.
+      collapseItems(comp);
       for (var li = 1; li <= comp.numLayers; li++) {
         try { comp.layer(li).selected = false; } catch (eDesel) {}
       }
