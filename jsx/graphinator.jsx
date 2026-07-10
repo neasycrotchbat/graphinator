@@ -355,6 +355,9 @@
   function tagItem(layer, ctrl) {
     layer.comment = ITEM_COMMENT;
     layer.setParentWithJump(ctrl);
+    // Deselect immediately — selected layers make AE reveal their freshly
+    // scripted properties, leaving the timeline twirled open after a build.
+    try { layer.selected = false; } catch (eSel) {}
   }
 
   function addShapeItem(comp, ctrl, name, labelColor) {
@@ -1290,6 +1293,11 @@
 
       storeData(ctrl, jsonStr);
       ctrl.moveToBeginning();
+
+      // Leave the timeline tidy: nothing selected, all layers collapsed.
+      for (var li = 1; li <= comp.numLayers; li++) {
+        try { comp.layer(li).selected = false; } catch (eDesel) {}
+      }
 
       app.endUndoGroup();
       undoOpen = false;

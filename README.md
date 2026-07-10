@@ -152,8 +152,12 @@ green, title red, controller purple).
 ### Data, import & presets
 
 - The Data section has two tabs: **Bar/Line/Area** (categories × up to 5
-  series — use *+ Series* / *− Series*) and **Pie** (label + value). The tab
-  follows the chart type; **⇄ Copy** seeds one from the other.
+  series — use *+ Series* / *− Series*) and **Pie**, whose values are entered
+  as **percentages** — a live total under the grid flags anything that
+  doesn't add up to 100%, and Generate enforces it (±0.5 tolerance). The tab
+  follows the chart type; **⇄ Copy** seeds one from the other (bar values
+  are converted to percentages on the way in). Pies saved before this change
+  are normalized to percentages when loaded.
 - **Import CSV…** or **Paste…** accept `Label, Value [, Value2, …]` rows —
   comma or tab separated, quoted cells OK, with an optional header row that
   names the series. The Pie tab imports the first two columns.
@@ -195,7 +199,10 @@ live rig.
 - **Line area fade is on the wrong edge** — set the area layer's
   Linear Wipe > Wipe Angle to `180°`.
 - **Glow feels heavy on playback** — untick `STYLE | Glow Enabled` on the
-  controller while working, re-enable for renders.
+  controller while working, re-enable for renders (or Bake to Keyframes).
+- **Timeline shows layers twirled open after a generate** — the script
+  deselects everything to prevent this; if some lanes are still open,
+  select all layers (Ctrl+A) and tap `U` twice to collapse them.
 - Panel debugging: open `http://localhost:8092` in Chrome while the panel is
   open (port set in `.debug`).
 

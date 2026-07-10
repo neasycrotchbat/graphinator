@@ -33,16 +33,30 @@
           { label: 'Q4', values: [2340], useCustom: false, color: DEFAULT_COLOR }
         ]
       },
+      // Pie values are PERCENTAGES of the whole and should total 100.
       pie: [
-        { label: 'Rent', value: 1200, useCustom: false, color: DEFAULT_COLOR },
-        { label: 'Food', value: 800, useCustom: false, color: DEFAULT_COLOR },
-        { label: 'Utilities', value: 350, useCustom: false, color: DEFAULT_COLOR },
-        { label: 'Savings', value: 650, useCustom: false, color: DEFAULT_COLOR }
+        { label: 'Rent', value: 40, useCustom: false, color: DEFAULT_COLOR },
+        { label: 'Food', value: 27, useCustom: false, color: DEFAULT_COLOR },
+        { label: 'Utilities', value: 12, useCustom: false, color: DEFAULT_COLOR },
+        { label: 'Savings', value: 21, useCustom: false, color: DEFAULT_COLOR }
       ]
     }
   };
 
   function dsForType(type) { return type === 'pie' ? 'pie' : 'barline'; }
+
+  /* Rescale the pie tab so its values are percentages totalling 100. */
+  function normalizePieToPercent() {
+    var total = state.datasets.pie.reduce(function (s, it) {
+      var v = parseNum(it.value);
+      return s + (isNaN(v) || v < 0 ? 0 : v);
+    }, 0);
+    if (total <= 0 || Math.abs(total - 100) <= 0.5) return;
+    state.datasets.pie.forEach(function (it) {
+      var v = parseNum(it.value);
+      it.value = isNaN(v) ? 0 : Math.round(v / total * 1000) / 10;
+    });
+  }
 
   // ------------------------------------------------------------- helpers
 
@@ -118,10 +132,26 @@
     schedulePreview();
   }
 
+  function pieTotal() {
+    return state.datasets.pie.reduce(function (s, it) {
+      var v = parseNum(it.value);
+      return s + (isNaN(v) ? 0 : v);
+    }, 0);
+  }
+
+  function updatePieTotal() {
+    var el = $('pieTotal');
+    if (!el) return;
+    var t = pieTotal();
+    var ok = Math.abs(t - 100) <= 0.5;
+    el.textContent = 'Total: ' + (Math.round(t * 10) / 10) + '%' + (ok ? '' : ' — should be 100%');
+    el.className = ok ? '' : 'off';
+  }
+
   function renderPieGrid(wrap) {
     var head = document.createElement('div');
     head.className = 'data-head';
-    head.innerHTML = '<span class="col-label">Label</span><span class="col-value">Value</span>' +
+    head.innerHTML = '<span class="col-label">Label</span><span class="col-value">Percent (%)</span>' +
       '<span class="col-custom" title="Override the auto tone">Custom</span><span class="col-del"></span>';
     wrap.appendChild(head);
 
@@ -130,7 +160,7 @@
       row.className = 'data-row';
 
       var label = mkInput('text', item.label, 'd-label', function (v) { item.label = v; schedulePreview(); });
-      var value = mkInput('text', item.value, 'd-value', function (v) { item.value = v; schedulePreview(); });
+      var value = mkInput('text', item.value, 'd-value', function (v) { item.value = v; updatePieTotal(); schedulePreview(); });
 
       var custom = document.createElement('div');
       custom.className = 'd-custom';
@@ -159,6 +189,11 @@
       }));
       wrap.appendChild(row);
     });
+
+    var totalEl = document.createElement('div');
+    totalEl.id = 'pieTotal';
+    wrap.appendChild(totalEl);
+    updatePieTotal();
   }
 
   function renderSeriesGrid(wrap) {
@@ -432,7 +467,8 @@
       },
       pie: {
         sortDesc: $('pieSort').checked,
-        includeValue: $('pieIncludeValue').checked,
+        includeValue: false, // inputs ARE percentages — a raw value adds nothing
+        percentInputs: true,
         donutHole: clamp(parseFloat($('pieDonut').value) || 0, 0, 90)
       },
       anim: {
@@ -450,12 +486,17 @@
       var src = state.datasets.pie;
       for (var i = 0; i < src.length; i++) {
         var v = parseNum(src[i].value);
-        if (!src[i].label || isNaN(v)) throw new Error('Pie tab, row ' + (i + 1) + ': needs a label and a numeric value.');
-        if (v <= 0) throw new Error('Pie charts need every value > 0 (row ' + (i + 1) + ').');
+        if (!src[i].label || isNaN(v)) throw new Error('Pie tab, row ' + (i + 1) + ': needs a label and a numeric percentage.');
+        if (v <= 0) throw new Error('Pie percentages must be > 0 (row ' + (i + 1) + ').');
         items.push({ label: src[i].label, value: v, useCustom: !!src[i].useCustom, color: src[i].color });
       }
-      if (items.length < 2) throw new Error('Pie tab: enter at least 2 data points.');
+      if (items.length < 2) throw new Error('Pie tab: enter at least 2 slices.');
       if (items.length > MAX_POINTS) throw new Error('Maximum ' + MAX_POINTS + ' data points.');
+      var tot = pieTotal();
+      if (Math.abs(tot - 100) > 0.5) {
+        throw new Error('Pie slices are percentages and must total 100% (currently ' +
+          (Math.round(tot * 10) / 10) + '%).');
+      }
       cfg.items = items;
     } else {
       var ds = state.datasets.barline;
@@ -524,6 +565,9 @@
       if (state.type === 'pie') state.datasets.pie = cleanPie(cfg.items);
       else state.datasets.barline = migrateBarline(cfg.items);
     }
+    // Charts saved before pie inputs became percentages hold raw values —
+    // normalize them so the tab still totals 100%.
+    if (!(cfg.pie && cfg.pie.percentInputs)) normalizePieToPercent();
 
     $('chartTitle').value = cfg.title || '';
     if (cfg.bar) $('barDir').value = cfg.bar.horizontal ? 'horizontal' : 'vertical';
@@ -542,7 +586,6 @@
     }
     if (cfg.pie) {
       $('pieSort').checked = !!cfg.pie.sortDesc;
-      $('pieIncludeValue').checked = !!cfg.pie.includeValue;
       $('pieDonut').value = cfg.pie.donutHole != null ? cfg.pie.donutHole : 0;
     }
     if (cfg.anim) {
@@ -594,7 +637,6 @@
       },
       pie: {
         sortDesc: $('pieSort').checked,
-        includeValue: $('pieIncludeValue').checked,
         donutHole: parseFloat($('pieDonut').value) || 0
       },
       anim: {
@@ -741,7 +783,10 @@
       }
       state.datasets.pie = items;
       renderGrid();
-      setStatus('Imported ' + items.length + ' rows into the Pie tab.', false);
+      var t = pieTotal();
+      setStatus('Imported ' + items.length + ' rows into the Pie tab.' +
+        (Math.abs(t - 100) > 0.5 ? ' Values are percentages — adjust to total 100% (now ' + (Math.round(t * 10) / 10) + '%).' : ''),
+        false);
       return;
     }
 
@@ -792,7 +837,8 @@
       state.datasets.pie = bl.rows.map(function (r) {
         return { label: r.label, value: parseNum(r.values[0]) || 0, useCustom: r.useCustom, color: r.color };
       });
-      setStatus('Copied ' + state.datasets.pie.length + ' rows from the Bar/Line tab (first series).', false);
+      normalizePieToPercent(); // pie inputs are percentages
+      setStatus('Copied ' + state.datasets.pie.length + ' rows from the Bar/Line tab (first series, converted to percentages).', false);
     } else {
       state.datasets.barline = {
         seriesNames: ['Series 1'],
